@@ -32,14 +32,6 @@ class DisplacementEstimate(NamedTuple):
     factor: float
     quantile: float
 
-class SliceInfo(NamedTuple):
-
-    sizes: list       # dimension of gradient and hessian at each peak
-    slices: list      # slices for filling in complete gradient vector
-    cov_slices: tuple # slices for the data and randomized value and gradient
-    nvalue: int      # len(sizes)
-    ngrad: int       # dimension of jacobian
-
 class RegressionInfo(NamedTuple):
 
     T: np.ndarray
@@ -50,27 +42,10 @@ class RegressionInfo(NamedTuple):
     sqrt_cov_R: np.ndarray
     cov_beta_T: np.ndarray
     cov_beta_TN: np.ndarray
-
-
-class InferenceInfo(NamedTuple):
-
-    peaks: list
-    inactive: np.ndarray # inactive set selector 
-    subgrad: np.ndarray # 
-    penalty: np.ndarray # penalty values at x_inactive
-    model_kernel: covariance_structure  # covariance used for fitting
-    randomizer_kernel: covariance_structure # covariance used for randomization (and fitting)
-    inference_kernel: covariance_structure
-    slice_info: SliceInfo
-    first_order: np.ndarray
-    cov: np.ndarray
-    contrast_info: tuple
-    logdet_info: tuple
-    barrier_info: tuple
     
-class PeakWithSlice(NamedTuple):
+class PointWithSlices(NamedTuple):
 
-    peak: Peak
+    point: Point
     value_slice: slice    # index into col of cov for value coords
     gradient_slice: slice # index into col of cov for gradient coords
     hessian_slice: slice # index into row/col of Hessian for each peak
@@ -86,6 +61,9 @@ class PeakWithSlice(NamedTuple):
 
     def set_gradient(self, arr, grad):
         arr[self.gradient_slice] =  grad
+
+    def get_hessian_block(self, arr):
+        return arr[self.hessian_slice]
 
 class LASSOInference(object):
 
@@ -113,22 +91,23 @@ class LASSOInference(object):
             data_peak = peak._replace(value=peak.value[0],
                                       gradient=peak.gradient[0],
                                       hessian=peak.hessian[0])
-            data_peak_slice = PeakWithSlice(peak=data_peak,
-                                            value_slice=slice(idx, idx + 1),
-                                            gradient_slice=slice(idx + 1,
-                                                                 idx + 1 + ngrad),
-                                            hessian_slice=slice(hess_idx, hess_idx + ngrad))
+            data_peak_slice = PointWithSlices(point=data_peak,
+                                              value_slice=slice(idx, idx + 1),
+                                              gradient_slice=slice(idx + 1,
+                                                                   idx + 1 + ngrad),
+                                              hessian_slice=slice(hess_idx, hess_idx + ngrad))
             idx += (1 + ngrad)
-
+            hess_idx += ngrad
+            
             random_peak = peak._replace(value=peak.value[1],
                                         gradient=peak.gradient[1],
                                         hessian=peak.hessian[1])
 
-            random_peak_slice = PeakWithSlice(peak=random_peak,
-                                              value_slice=slice(idx, idx + 1),
-                                              gradient_slice=slice(idx + 1,
-                                                                   idx + 1 + ngrad),
-                                              hessian_slice=data_peak_slice.hessian_slice)
+            random_peak_slice = PointWithSlices(point=random_peak,
+                                                value_slice=slice(idx, idx + 1),
+                                                gradient_slice=slice(idx + 1,
+                                                                    idx + 1 + ngrad),
+                                                hessian_slice=data_peak_slice.hessian_slice)
             self.data_peaks.append(data_peak_slice)
             self.random_peaks.append(random_peak_slice)
 
@@ -136,11 +115,11 @@ class LASSOInference(object):
 
         for point in extra_points: # extra points should have no randomization
             ngrad = point.gradient.shape[0]
-            extra_point_slice = PeakWithSlice(peak=point,
-                                              value_slice=slice(idx, idx + 1),
-                                              gradient_slice=slice(idx + 1,
-                                                                   idx + 1 + ngrad),
-                                              hessian_slice=None)
+            extra_point_slice = PointWithSlices(point=point,
+                                                value_slice=slice(idx, idx + 1),
+                                                gradient_slice=slice(idx + 1,
+                                                                    idx + 1 + ngrad),
+                                                hessian_slice=None)
             self.extra_points.append(extra_point_slice)
             idx += (1 + ngrad)
 
@@ -150,7 +129,9 @@ class LASSOInference(object):
                                    randomizer_kernel,
                                    inference_kernel)
 
-        cov = self.cov = self._compute_cov(idx)
+        cov_size = idx
+        hess_size = hess_idx
+        cov = self.cov = self._compute_cov(cov_size)
         self.prec = np.linalg.inv(self.cov)
         
         # we use our regression decomposition to rewrite this in terms of
@@ -169,29 +150,35 @@ class LASSOInference(object):
 
         T = []
         for p in self.data_peaks + self.extra_points:
-            value_row = np.zeros((1,cov.shape[0]))
-            value_row[p.value_slice] = 1
-            ngrad = get_gradient(p).shape[0]
+            value_col = np.zeros((cov.shape[0], 1))
+            p.set_value(value_col, 1)
 
             # TODO, each peak / extra point should have a flag as to whether
             # their displacement is a parameter or not
 
-            gradient_rows = np.zeros((ngrad, cov.shape[0]))
-            gradient_rows[:,p.gradient_slice] = np.identity(ngrad)
-            T.append(np.concatenate([value_row, gradient_rows], axis=0))
+            ngrad = get_gradient(p).shape[0]
+            gradient_cols = np.zeros((cov.shape[0], ngrad))
+            p.set_gradient(gradient_cols, np.identity(ngrad))
+            T.append(np.concatenate([value_col, gradient_cols], axis=1).T)
 
         T = np.concatenate(T, axis=0)
-        total_ngrad = idx - len(self.data_peaks)
+
+        # now specify the value the gradient is pinned at
+        
         N = []
 
         idx = 0 # restart counter
         for i, (p_d, p_r) in enumerate(zip(self.data_peaks, self.random_peaks)):
             ngrad = get_tangent_gradient(p_d).shape[0]
-            N_rows = np.zeros((ngrad, cov.shape[0]))
-            N_rows[:,p_d.gradient_slice] = np.identity(ngrad)
-            N_rows[:,p_r.gradient_slice] = np.identity(ngrad)
-            N_rows[:,p_d.value_slice] = -M[i, p_d.value_slice] # check the indexing on M
-            N_rows[:,p_r.value_slice] = -M[i, p_r.value_slice]
+            N_cols = np.zeros((cov.shape[0], ngrad))
+            p_d.set_gradient(N_cols, np.identity(ngrad))
+            p_r.set_gradient(N_cols, np.identity(ngrad))
+            p_d.set_value(N_cols, -p_d.get_hessian_block(M[i]))
+            p_r.set_value(N_cols, -p_r.get_hessian_block(M[i]))
+
+            N.append(N_cols)
+
+        N = np.hstack(N).T
 
         # why isn't this used? hmm...
         NZ_obs = -M.T @ np.array([p.sign * p.penalty for p in peaks])
@@ -202,8 +189,8 @@ class LASSOInference(object):
 
         self.first_order = np.zeros(cov.shape[0])
         for p in self.data_peaks + self.random_peaks + self.extra_points:
-            self.first_order[p.value_slice] = p.value
-            self.first_order[p.gradient_slice] = get_gradient(p)
+            p.set_value(self.first_order, p.point.value)
+            p.set_gradient(self.first_order, get_gradient(p.point))
 
         (self.inactive,
          self.subgrad,
@@ -211,14 +198,9 @@ class LASSOInference(object):
                           subgrad,
                           penalty)
 
-        logdet_info = self._form_logdet(G_blocks,
-                                        C00i)
-
-        barrier_info = _form_barrier(info)
-
-        info = info._replace(barrier_info=barrier_info,
-                             logdet_info=logdet_info)
-        return info
+        self._form_logdet(G_blocks,
+                          C00i)
+        self._form_barrier()
 
     def _compute_cov(self, cov_size):
         cov = np.zeros((cov_size, cov_size))
@@ -257,22 +239,22 @@ class LASSOInference(object):
         self._compute_G_hess()
         G_hess, N_hess = self.G_hess, self.N_hess
         
-        self._compute_G_proj(G_blocks) 
-        G_proj, N_proj = self.G_proj, self.N_proj
+        self._compute_G_regressMR(G_blocks) 
+        G_regressMR, N_regressMR = self.G_regressMR, self.N_regressMR
 
         self._compute_shape_prods(C00i)
         G_shape, N_shape = self.G_shape, self.N_shape
 
-        G_logdet = G_hess + G_proj + G_shape
-        N_logdet = N_hess + N_proj + N_shape
+        G_logdet = G_hess + G_regressMR + G_shape
+        N_logdet = N_hess + N_regressMR + N_shape
 
         def logdet(G_logdet,
                    N_logdet,
                    first_order):
             hessian_mat = jnp.einsum('ijk,k->ij', G_logdet, first_order) + N_logdet
             if DEBUG:
-                for (G, N, n) in zip([G_logdet, G_hess, G_proj, G_shape],
-                                     [N_logdet, N_hess, N_proj, N_shape],
+                for (G, N, n) in zip([G_logdet, G_hess, G_regressMR, G_shape],
+                                     [N_logdet, N_hess, N_regressMR, N_shape],
                                      ['logdet', 'hessian', 'proj', 'dot']):
                     _mat = jnp.einsum('ijk,k->ij', G, first_order) + N
                     if jnp.any(jnp.linalg.eigvalsh(hessian_mat) < 0):
@@ -289,6 +271,68 @@ class LASSOInference(object):
 
         return logdet_, G_logdet, N_logdet
 
+    def _form_barrier(self):
+
+        # decompose the KKT conditions
+
+        penalty, inactive = self.penalty, self.inactive
+
+        ((L_inactive, offset_inactive),
+         (L_active, offset_active)) = self._decompose_KKT()
+
+        # active KKT condtion is L_active @ obs + offset_active >= 0
+
+        L_inactive /= (penalty[inactive,None] / 2)
+        offset_inactive /= (penalty[inactive] / 2)
+
+        GI_barrier = np.concatenate([L_inactive,
+                                     -L_inactive], axis=0)
+        NI_barrier = np.hstack([2 + offset_inactive,
+                                2 - offset_inactive])
+
+        def barrierI(G_barrier,
+                     N_barrier,
+                     obs):
+
+            arg = G_barrier @ obs + N_barrier
+            if DEBUG:
+                if jnp.any(arg < 0):
+                    jax.debug.print('INACTIVE BARRIER {}', arg[arg<0])
+            val = -jnp.mean(jnp.log(arg / (arg + 0.5)))
+            return val
+
+        def barrierA(G_barrier,
+                     N_barrier,
+                     obs):
+
+            arg = G_barrier @ obs + N_barrier
+            if DEBUG:
+                if jnp.any(arg < 0):
+                    jax.debug.print('ACTIVE BARRIER {}', arg[arg<0])
+            return -jnp.sum(jnp.log(arg / (arg + 1)))
+
+        V = L_active @ info.first_order + offset_active
+
+        barrierI_ = partial(barrierI,
+                            GI_barrier,
+                            NI_barrier)
+
+        barrierA_ = partial(barrierA,
+                            L_active,
+                            offset_active)
+
+        def barrier(barrierA,
+                    barrierI,
+                    arg):
+            return barrierA(arg) + barrierI(arg)
+
+        return (partial(barrier, barrierI_, barrierA_),
+                np.concatenate([GI_barrier,
+                                L_active], axis=0),
+                np.hstack([NI_barrier, offset_active]))
+
+    # private methods to decompose the derivative of the 0-counted process
+
     def _compute_G_hess(self):  
 
         # decompose each part of the Hessian into
@@ -299,27 +343,27 @@ class LASSOInference(object):
 
         blocks = []
         for peak in self.data_peaks:
-            block = np.zeros(get_gradient(peak.peak).shape + self.cov.shape[:1])
+            block = np.zeros(get_gradient(peak.point).shape + self.cov.shape[:1])
 
             for point in self.data_peaks + self.extra_points:
-                C20_q = IK.C20([peak.peak.location],
-                               [point.peak.location],
-                               basis_l=peak.peak.tangent_basis)[0,0] 
-                C21_q = IK.C21([peak.peak.location],
-                               [point.peak.location],
-                              basis_l=peak.peak.tangent_basis,
-                              basis_r=point.peak.tangent_basis)[0,0] 
+                C20_q = IK.C20([peak.point.location],
+                               [point.point.location],
+                               basis_l=peak.point.tangent_basis)[0,0] 
+                C21_q = IK.C21([peak.point.location],
+                               [point.point.location],
+                              basis_l=peak.point.tangent_basis,
+                              basis_r=point.point.tangent_basis)[0,0] 
                 block[:,:,point.value_slice] = C20_q
                 block[:,:,point.gradient_slice] = C21_q
 
             for point in self.random_peaks:
-                C20_q = RK.C20([peak.peak.location],
-                               [point.peak.location],
-                               basis_l=peak.peak.tangent_basis)[0,0] 
-                C21_q = RK.C21([peak.peak.location],
-                               [point.peak.location],
-                              basis_l=peak.peak.tangent_basis,
-                              basis_r=point.peak.tangent_basis)[0,0] 
+                C20_q = RK.C20([peak.point.location],
+                               [point.point.location],
+                               basis_l=peak.point.tangent_basis)[0,0] 
+                C21_q = RK.C21([peak.point.location],
+                               [point.point.location],
+                              basis_l=peak.point.tangent_basis,
+                              basis_r=point.point.tangent_basis)[0,0] 
                 block[:,:,point.value_slice] = C20_q
                 block[:,:,point.gradient_slice] = C21_q
 
@@ -330,13 +374,11 @@ class LASSOInference(object):
         N = np.zeros((total_block_sizes, total_block_sizes))
 
         idx = 0
-        block_slices = []
         for block, p_d, p_r in zip(blocks, self.data_peaks, self.random_peaks):
-            block_slice = slice(idx, idx + block.shape[0])
-            G[block_slice, block_slice, :] = block
-            N[block_slice, block_slice] += -p_d.sign * get_hessian(p_d)
-            N[block_slice, block_slice] += -p_d.sign * get_hessian(p_r) # p_d.sign should match p_r.sign
-            block_slices.append(block_slice)
+            H_slice = p_d.hessian_slice
+            G[H_slice, H_slice, :] = block
+            N[H_slice, H_slice] += -p_d.sign * get_hessian(p_d)
+            N[H_slice, H_slice] += -p_d.sign * get_hessian(p_r) # p_d.sign should match p_r.sign
             
         N -= np.einsum('ijk,kl,l->ij',
                        G,
@@ -344,39 +386,37 @@ class LASSOInference(object):
                        self.first_order)
 
         self.G_hess, self.N_hess = G, N
-        return block_slices
     
-    def _compute_G_proj(self,
-                        G_blocks):
+    def _compute_G_regressMR(self,
+                             G_blocks):
 
         # let's compute the -S_E P(\nabla^2 f_E; f_E) term
         # this comes from differentiating the derivative of the irrepresentable matrix
         # this is why we use covariance terms that come from the model + randomizer covariance
         
-        N_proj = np.zeros_like(self.N_hess)
-        G_proj = np.zeros_like(self.G_hess)
+        N_regressMR = np.zeros_like(self.N_hess)
+        G_regressMR = np.zeros_like(self.G_hess)
 
         idx = 0            
         for block in G_blocks:
             for i, (p_d, p_r) in enumerate(zip(self.data_peaks, self.random_peaks)):
-                G_proj[p_d.hessian_slice,
-                       p_d.hessian_slice,
-                       p_d.value_slice] = block
-                G_proj[p_r.hessian_slice,  # p_d.hessian_slice should match p_r.hessian_slice
-                       p_r.hessian_slice,
-                       p_r.value_slice] = block
+                G_regressMR[p_d.hessian_slice,
+                            p_d.hessian_slice,
+                            p_d.value_slice] = block
+                G_regressMR[p_r.hessian_slice,  # p_d.hessian_slice should match p_r.hessian_slice
+                            p_r.hessian_slice,
+                            p_r.value_slice] = block
 
-        # G_proj is now the regression of -p.sign * p.hessian on to f_E (MK+RK form)
+        # G_regressMR is now the regression of -p.sign * p.hessian on to f_E (MK+RK form)
         # i.e. it is the corresponding irrepresentable matrix
 
         arg = np.zeros_like(self.first_order)
-        delta = -np.array([p.sign * p.penalty for p in info.peaks])
-        for i, p_d in enumerate(self.data_peaks):
-            arg[p_d.value_slice] = delta[i]
+        for p_d in self.data_peaks:
+            p_d.set_value(arg, -p_d.point.sign * p_d.point.penalty)
 
-        N_proj = np.einsum('ijk,k->ij', G_proj, arg)
+        N_regressMR = np.einsum('ijk,k->ij', G_regressMR, arg)
 
-        self.G_proj, self.N_proj = G_proj, N_proj
+        self.G_regressMR, self.N_regressMR = G_regressMR, N_regressMR
 
     def _compute_shape_prods(self,
                            C00i):
@@ -393,16 +433,16 @@ class LASSOInference(object):
         # with blocks like s_j beta_j
 
         for i, peak in enumerate(self.data_peaks):
-            if peak.peak.n_ambient > 0:
+            if peak.point.n_ambient > 0:
                 ngrad = get_tangent_gradient(p)
                 E_[p.hessian_slice,
                    p.hessian_slice,
                    i] = np.identity(ngrad)
 
-        locations = [q.peak.location for q in self.data_peaks]
+        locations = [q.point.location for q in self.data_peaks]
 
         for i, qs_l in enumerate(self.data_peaks):
-            q_l = qs_l.peak
+            q_l = qs_l.point
             if q_l.n_ambient > 0:
                 c10_l = (MK.C10([q_l.location],
                                 locations,
@@ -411,7 +451,7 @@ class LASSOInference(object):
                                 locations,
                                 basis_l=q_l.tangent_basis)[0].T) 
                 for j, qs_r in enumerate(self.data_peaks):
-                    q_r = qs_r.peak
+                    q_r = qs_r.point
                     if q_r.n_ambient > 0:
                         c11 = (MK.C11([q_l.location],
                                       [q_r.location],
@@ -435,11 +475,10 @@ class LASSOInference(object):
                                                     qs_r.hessian_slice].T
 
         arg = np.zeros_like(self.first_order)
-        delta = np.array([p.sign * p.penalty for p in info.peaks])
 
         for q_d in self.data_peaks:
-            D_[q_d.hessian_slice] *= q_d.peak.sign
-            arg[q_d.peak.value_slice] -= q_d.peak.sign * q_d.peak.penalty
+            D_[q_d.hessian_slice] *= q_d.point.sign
+            q_d.set_value(arg, q_d.get_value(arg) - q_d.point.sign * q_d.point.penalty)
 
         G_ = np.einsum('ij,jkl,lm->ijm',
                        D_,
@@ -455,6 +494,7 @@ class LASSOInference(object):
         N_shape = np.einsum('ijk,k->ij', G_shape, arg)
         self.G_shape, self.N_shape = G_shape, N_shape
 
+    # decompose the subgradient process in terms of all the targets in cov
 
     def _decompose_KKT(self,
                        C00i):
@@ -464,133 +504,47 @@ class LASSOInference(object):
         IK = self.inference_kernel
 
         irrep = (MK.C00(None,
-                        [p.location for p in peaks]) +
+                        [p.point.location for p in self.data_peaks]) +
                  RK.C00(None,
-                        [p.location for p in peaks]))[inactive] @ C00i
+                        [p.point.location for p in self.data_peaks]))[inactive] @ C00i
 
-        pre_proj = np.zeros(subgrad[inactive].shape[:1] + cov.shape[:1])
+        pre_proj = np.zeros(self.cov.shape[:1] + self.subgrad[inactive].shape[:1])
 
-        # fill in covariance with data and random values
+        # fill in covariance with data and extra points
 
-        pre_proj[:,data_value_slice] = IK.C00(None,
-                                              [p.location for p in peaks])[inactive]
-        pre_proj[:,random_value_slice] = RK.C00(None,
-                                                [p.location for p in peaks])[inactive]
-        # now covariance with data gradient
+        for peaks, K in [(self.data_peaks + self.extra_points, IK),
+                         (self.random_points, RK)]:
+            for p in peaks:
+                p.set_value(pre_proj, K.C00(None,
+                                            [p.point.location])[inactive])
+                p.set_gradient(pre_proj, K.C01(None,
+                                               [p.point.location],
+                                               basis_r=p.point.tangent_basis)[inactive, 0])
 
-        C01 = np.zeros_like(pre_proj[:,data_grad_slice])
-        for i, (p, s) in enumerate(zip(peaks, slices)):
-            C01[:,s] = IK.C01(None,
-                              [p.location],
-                              basis_r=p.tangent_basis)[inactive,0]
-        pre_proj[:,data_grad_slice] = C01
+        L_inactive = self.prec @ pre_proj
 
-        # finally with randomizer gradient
+        for i, (p_d, p_r) in enumerate(zip(self.data_peaks,
+                                           self.random_peaks)):
+            p_d.set_value(L_inactive, p_d.get_value(L_inactive) - irrep[:,i])
+            p_r.set_value(L_inactive, p_r.get_value(L_inactive) - irrep[:,i])
 
-        C01 = np.zeros_like(pre_proj[:,random_grad_slice])
-        for i, (p, s) in enumerate(zip(peaks, slices)):
-            C01[:,s] = RK.C01(None,
-                              [p.location],
-                              basis_r=p.tangent_basis)[inactive,0]
-        pre_proj[:,random_grad_slice] = C01
+        L_inactive = L_inactive.T
+        offset_inactive = subgrad[inactive] - L_inactive @ self.first_order
 
-        # if any extra points:
+        signs = np.array([p.point.sign for p in self.data_peaks])
+        L_active = np.zeros((cov.shape[0], len(self.data_peaks)))
+        for i, (p_d, p_r) in enumerate(zip(self.data_peaks,
+                                           self.random_peaks)):
+            p_d.set_value(L_active, C00i[i])
+            p_r.set_value(L_active, C00i[i])
 
-        if extra_points is not None:
-            pre_proj[:,extra_data_slice] = IK.C00(None,
-                                                  [p.location for p in extra_points])[inactive]
-            C01 = np.zeros_like(pre_proj[:,extra_grad_slice])
-            for i, (p, s) in enumerate(zip(extra_points, extra_slices)):
-                C01[:,s] = IK.C01(None,
-                                  [p.location],
-                                  basis_r=p.tangent_basis)[inactive,0]
-            pre_proj[:,extra_grad_slice] = C01
-
-        proj = pre_proj @ np.linalg.inv(cov)
-
-        L_inactive = proj
-
-        L_inactive[:,data_value_slice] -= irrep
-        L_inactive[:,random_value_slice] -= irrep
-        offset_inactive = subgrad[inactive] - L_inactive @ info.first_order
-
-        signs = np.array([p.sign for p in peaks])
-        L_active = np.zeros((len(peaks), cov.shape[0]))
-        L_active[:,data_value_slice] = C00i
-        L_active[:,random_value_slice] = C00i
-
-        offset_active = -C00i @ np.array([p.penalty * p.sign for p in peaks])
+        L_active = L_active.T
+        offset_active = -C00i @ np.array([p.point.penalty * p.point.sign for p in self.data_peaks])
         L_active = (np.diag(signs) @ L_active) / np.sqrt(np.diag(C00i))[:,None]
         offset_active = signs * offset_active / np.sqrt(np.diag(C00i))
 
         return ((L_inactive, offset_inactive),
                 (L_active, offset_active))
-
-
-# we will now compute terms needed to restrict G_hess to each (f_j,
-# \nabla f_j, \omega_j, \nabla \omega_j) and
-# fix the R(\nabla(f+\omega)_E;(f+\omega)_E)= - \nabla irrep_path
-
-def _form_barrier(info):
-
-    # decompose the KKT conditions
-    
-    penalty, inactive = info.penalty, info.inactive
-
-    ((L_inactive, offset_inactive),
-     (L_active, offset_active)) = _decompose_KKT(info)
-
-    # active KKT condtion is L_active @ obs + offset_active >= 0
-    
-    L_inactive /= (penalty[inactive,None] / 2)
-    offset_inactive /= (penalty[inactive] / 2)
-    
-    GI_barrier = np.concatenate([L_inactive,
-                                 -L_inactive], axis=0)
-    NI_barrier = np.hstack([2 + offset_inactive,
-                            2 - offset_inactive])
-
-    def barrierI(G_barrier,
-                 N_barrier,
-                 obs):
-
-        arg = G_barrier @ obs + N_barrier
-        if DEBUG:
-            if jnp.any(arg < 0):
-                jax.debug.print('INACTIVE BARRIER {}', arg[arg<0])
-        val = -jnp.mean(jnp.log(arg / (arg + 0.5)))
-        return val
-    
-    def barrierA(G_barrier,
-                 N_barrier,
-                 obs):
-
-        arg = G_barrier @ obs + N_barrier
-        if DEBUG:
-            if jnp.any(arg < 0):
-                jax.debug.print('ACTIVE BARRIER {}', arg[arg<0])
-        return -jnp.sum(jnp.log(arg / (arg + 1)))
-    
-    V = L_active @ info.first_order + offset_active
-
-    barrierI_ = partial(barrierI,
-                        GI_barrier,
-                        NI_barrier)
-
-    barrierA_ = partial(barrierA,
-                        L_active,
-                        offset_active)
-    
-    def barrier(barrierA,
-                barrierI,
-                arg):
-        return barrierA(arg) + barrierI(arg)
-    
-    return (partial(barrier, barrierI_, barrierA_),
-            np.concatenate([GI_barrier,
-                            L_active], axis=0),
-            np.hstack([NI_barrier, offset_active]))
-
 
 def _compute_random_model_cov(peaks,
                               model_kernel,
@@ -600,6 +554,9 @@ def _compute_random_model_cov(peaks,
 
     This is the actual quadratic form used in the optimization problem.
     
+    Used for gradient of irrepresentable path at E
+    and irrepresentable matrix.
+
     """
     C_p = []
     C_g = []
