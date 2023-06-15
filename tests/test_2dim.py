@@ -7,7 +7,7 @@ import pandas as pd
 from gplasso.kernel_calcs import covariance_structure
 from gplasso.peaks import extract_peaks, extract_points
 from gplasso.taylor_expansion import taylor_expansion_window
-from gplasso.general_inference import LASSOInference, inference
+from gplasso.general_inference import LASSOInference
 from gplasso.gplasso import fit_gp_lasso
 
 def instance(seed=10,
@@ -85,10 +85,9 @@ def instance(seed=10,
                           inference_kernel=None,
                           displacement=True)
 
-    pivot_carve, disp_carve = inference(info,
-                                        one_sided=False,
-                                        param=None,
-                                        level=0.9)
+    pivot_carve, disp_carve = info.summary(one_sided=False,
+                                           param=None,
+                                           level=0.9)
 
     return pivot_carve, svd_info
 
