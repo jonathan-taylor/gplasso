@@ -7,7 +7,7 @@ import pandas as pd
 from gplasso.kernel_calcs import covariance_structure
 from gplasso.peaks import extract_peaks, extract_points
 from gplasso.taylor_expansion import taylor_expansion_window
-from gplasso.randomized_inference import setup_inference, inference
+from gplasso.general_inference import LASSOInference, inference
 from gplasso.gplasso import fit_gp_lasso
 
 def instance(seed=10,
@@ -76,14 +76,14 @@ def instance(seed=10,
         inactive[max(i-2, 0):(i+2),
                  max(j-2, 0):(j+2)] = 0
 
-    info = setup_inference(peaks,
-                           inactive,
-                           subgrad,
-                           penalty_weights,
-                           K,
-                           K_omega,
-                           inference_kernel=None,
-                           displacement=True)
+    info = LASSOInference(peaks,
+                          inactive,
+                          subgrad,
+                          penalty_weights,
+                          K,
+                          K_omega,
+                          inference_kernel=None,
+                          displacement=True)
 
     pivot_carve, disp_carve = inference(info,
                                         one_sided=False,
