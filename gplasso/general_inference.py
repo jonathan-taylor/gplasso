@@ -226,13 +226,15 @@ class LASSOInference(object):
 
     def extract_peaks(self,
                       E_nz,
-                      clusters,
                       signs,
                       second_order,
                       tangent_bases,
                       normal_info,
+                      clusters=None,
                       seed=1): # seed for choosing a representative from a cluster
 
+        if clusters is None:
+            clusters = np.arange(E_nz[0].shape[0])
         peaks, idx = extract_peaks(E_nz,
                                    clusters,
                                    second_order,

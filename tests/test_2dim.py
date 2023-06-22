@@ -65,13 +65,12 @@ def instance(seed=10,
                                 K,
                                 cor_threshold=0.9)
 
-    print(E_nz, 'E_nz')
     peaks, idx = lasso.extract_peaks(E_nz,
-                                     clusters,
                                      signs,
                                      second_order,
                                      tangent_bases,
-                                     normal_info)
+                                     normal_info,
+                                     clusters=clusters)
 
     if plot:
         fig, ax = plt.subplots(figsize=(8, 10))

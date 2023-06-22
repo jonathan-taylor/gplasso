@@ -421,10 +421,12 @@ class covariance_structure(object):
 class discrete_structure(covariance_structure):
 
     def __init__(self,
-                 S):
+                 S,
+                 svd_info=None):
         self.grid = (np.arange(S.shape[0]),)
         self._grid = np.asarray(self.grid)
         self.S_ = S
+        self._svd_info = svd_info
         
     def C00(self,
             loc_l,

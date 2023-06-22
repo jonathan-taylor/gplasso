@@ -7,6 +7,7 @@ from gplasso.kernel_calcs import covariance_structure, discrete_structure
 from gplasso.peaks import extract_peaks, extract_points
 from gplasso.taylor_expansion import taylor_expansion_window
 from gplasso.randomized_inference import setup_inference, inference
+from gplasso.general_inference import LASSOInference
 
 import regreg.api as rr
 
@@ -21,37 +22,40 @@ def instance(seed=10,
     p = 50
 
     W = rng.standard_normal((1000,p))
-    S = W.T @ W / p**2
+    S = W.T @ W / 1000
     
     K = discrete_structure(S)
 
-    if svd_info is None:
-        S_ = K.C00(None, None).reshape(p, p)
-        A, D = np.linalg.svd(S_)[:2]
-        svd_info = A, D
-    else:
-        A, D = svd_info
-        S_ = (A * D[None,:]) @ A.T
-    Z = A @ (np.sqrt(D) * rng.standard_normal(p))
+    Z = K.sample()
 
     proportion = 0.8
     var_random = (1 - proportion) / proportion
     K_omega = discrete_structure(var_random * S)
-    omega = A @ (np.sqrt(D) * rng.standard_normal(p) * np.sqrt(var_random))
     
     penalty_weights = 2 * np.sqrt(1 + var_random) * np.ones_like(Z)
 
-    S_r = S_ * (1 + var_random)
-    loss = rr.quadratic_loss(Z.shape[0], Q=S_r)
-    linear_term = rr.identity_quadratic(0, 0, -Z-omega,0)
-    penalty = rr.weighted_l1norm(penalty_weights, lagrange=1)
-    problem = rr.simple_problem(loss,
-                                penalty)
-    soln = problem.solve(linear_term, min_its=200, tol=1e-12)
-    E = soln != 0
-    subgrad = Z+omega - S_r @ soln
+    lasso = LASSOInference(Z,
+                           penalty_weights,
+                           K,
+                           K_omega,
+                           inference_kernel=None)
+
+    E, soln, subgrad = lasso.fit()
+    signs = np.sign(subgrad[E])
+
+    # S_r = S_ * (1 + var_random)
+    # loss = rr.quadratic_loss(Z.shape[0], Q=S_r)
+    # linear_term = rr.identity_quadratic(0, 0, -Z-omega,0)
+    # penalty = rr.weighted_l1norm(penalty_weights, lagrange=1)
+    # problem = rr.simple_problem(loss,
+    #                             penalty)
+    # soln = problem.solve(linear_term, min_its=200, tol=1e-12)
+    # E = soln != 0
+    # subgrad = Z+omega - S_r @ soln
     
+    omega = lasso.perturbation_
     if E.sum() > 0:
+
         signs = np.sign(subgrad[E])
 
         second_order = []
@@ -65,31 +69,22 @@ def instance(seed=10,
 
         E_nz = np.nonzero(E)
 
-        peaks, clusters, _ = extract_peaks(E_nz,
-                                           second_order,
-                                           tangent_bases,
-                                           normal_info,
-                                           K,
-                                           signs,
-                                           penalty_weights,
-                                           seed=1)
+        peaks, idx = lasso.extract_peaks(E_nz,
+                                         signs,
+                                         second_order,
+                                         tangent_bases,
+                                         normal_info)
 
         inactive = np.ones(soln.shape, bool)
         inactive[E_nz] = 0
 
-        info = setup_inference(peaks,
-                               inactive,
-                               subgrad,
-                               penalty_weights,
-                               K,
-                               K_omega,
-                               inference_kernel=None,
-                               displacement=True)
+        lasso.setup_inference(peaks,
+                              inactive,
+                              subgrad)
 
-        pivot_carve, disp_carve = inference(info,
-                                            one_sided=False,
-                                            param=None,
-                                            level=0.9)
+        pivot_carve, disp_carve = lasso.summary(one_sided=False,
+                                                param=None,
+                                                level=0.9)
 
         return pivot_carve, svd_info
     else:

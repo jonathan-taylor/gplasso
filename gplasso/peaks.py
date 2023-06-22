@@ -255,8 +255,6 @@ def extract_points(E,
                                   )
             
         points.append(point)
-        print(idx, tuple([e[idx] for e in E]), 'idx')
-        print([e for e in E])
         indices.append(tuple([e[idx] for e in E]))
 
     return points, np.asarray(indices)
