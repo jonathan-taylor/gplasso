@@ -15,13 +15,16 @@ from jax import jacfwd
 from .kernel_calcs import covariance_structure
 from .optimization_problem import barrier as barrier_nojax
 from .optimization_problem import logdet as logdet_nojax
+from .gplasso import fit_gp_lasso
 
 from .peaks import (get_gradient,
                     get_tangent_gradient,
                     get_normal_gradient,
                     get_hessian,
                     Peak,
-                    Point)
+                    Point,
+                    extract_peaks,
+                    extract_points)
 
 DEBUG = False
 
@@ -69,21 +72,35 @@ class PointWithSlices(NamedTuple):
 class LASSOInference(object):
 
     def __init__(self,
-                 peaks,
-                 inactive,
-                 subgrad,
+                 Z,
                  penalty,
                  model_kernel,
                  randomizer_kernel,
-                 displacement=False,
-                 inference_kernel=None,
-                 proportion=0.8,
-                 extra_points=[]):
-
+                 inference_kernel=None):
+       
         if inference_kernel is None:
             inference_kernel = model_kernel
-        self.proportion = proportion
-        
+
+        (self.Z,
+         self.penalty,
+         self.model_kernel,
+         self.randomizer_kernel,
+         self.inference_kernel) = (Z,
+                                   penalty,
+                                   model_kernel,
+                                   randomizer_kernel,
+                                   inference_kernel)
+
+    def setup_inference(self,
+                        peaks,
+                        inactive,
+                        subgrad,
+                        extra_points=[]):
+
+        (self.inactive,
+         self.subgrad) = (inactive,
+                          subgrad)
+
         self.data_peaks = []
         self.random_peaks = []
         self.extra_points = []
@@ -127,12 +144,6 @@ class LASSOInference(object):
                                                 hessian_slice=None)
             self.extra_points.append(extra_point_slice)
             idx += (1 + ngrad)
-
-        (self.model_kernel,
-         self.randomizer_kernel,
-         self.inference_kernel) = (model_kernel,
-                                   randomizer_kernel,
-                                   inference_kernel)
 
         cov_size = idx
         hess_size = hess_idx
@@ -197,20 +208,42 @@ class LASSOInference(object):
             p.set_value(self.first_order, p.point.value)
             p.set_gradient(self.first_order, get_gradient(p.point))
 
-        (self.inactive,
-         self.subgrad,
-         self.penalty) = (inactive,
-                          subgrad,
-                          penalty)
 
         self.logdet_info = self._form_logdet(G_blocks,
                                              C00i)
         self.barrier_info = self._form_barrier(C00i)
 
-    def randomize(self):
+    def fit(self):
+        
+        # fit the GP lasso
+        self.perturbation_ = self.randomizer_kernel.sample()
+        MK, RK = self.model_kernel, self.randomizer_kernel
+        E, soln, subgrad = fit_gp_lasso(self.Z + self.perturbation_,
+                                        [MK, RK],
+                                        self.penalty)
 
-        self._omega = self.randomizer_kernel.sample()
-        return self._omega
+        return E, soln, subgrad
+
+    def extract_peaks(self,
+                      E_nz,
+                      clusters,
+                      signs,
+                      second_order,
+                      tangent_bases,
+                      normal_info,
+                      seed=1): # seed for choosing a representative from a cluster
+
+        peaks, idx = extract_peaks(E_nz,
+                                   clusters,
+                                   second_order,
+                                   tangent_bases,
+                                   normal_info,
+                                   self.model_kernel,
+                                   signs,
+                                   self.penalty,
+                                   seed=seed)
+
+        return peaks, idx
     
     def summary(self,
                 level=0.90,

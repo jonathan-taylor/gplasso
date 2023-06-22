@@ -48,7 +48,8 @@ class covariance_structure(object):
     def __init__(self,
                  kernel,
                  kernel_args={},
-                 grid=None): # default grid of x values
+                 grid=None,
+                 svd_info=None): # default grid of x values
         """
         Compute covariance structure of field
         and its first two derivatives at points
@@ -61,6 +62,7 @@ class covariance_structure(object):
 
         self.grid = grid
         self._grid = np.asarray(grid)
+        self._svd_info = svd_info
         
     @staticmethod
     def gaussian(precision=None,
@@ -70,6 +72,28 @@ class covariance_structure(object):
                                     kernel_args={'precision':precision,
                                                  'var':var},
                                     grid=grid)
+
+    # default simulation method -- better subclasses will overwrite
+
+    def sample(self, rng=None):
+
+        if rng is None:
+            rng = np.random.default_rng()
+
+        if self._svd_info is None:
+            S_ = self.C00(None, None)
+            npt = int(np.sqrt(np.product(S_.shape)))
+            shape = S_.shape[:len(S_.shape)//2]
+            S_ = S_.reshape(npt, npt)
+            A, D = np.linalg.svd(S_)[:2]
+            self.svd_info_ = A, D, npt, shape
+        else:
+            A, D, npt = self.svd_info_
+
+        Z = A @ (np.sqrt(D) * rng.standard_normal(npt))
+        Z = Z.reshape(shape)
+        return Z
+
 
     # location based computations
 

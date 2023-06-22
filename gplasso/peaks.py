@@ -129,24 +129,22 @@ def get_hessian(pt):
     return H
 
 def extract_peaks(E,
+                  clusters,
                   second_order, # second order info (value, ambient gradient, ambient hessian) at each point in E
                   tangent_bases, # basis for tangent space at each point in E
                   normal_info, # normal basis and normal constraint at each point in E
                   K,
                   signs,
                   penalty_weights,
-                  seed=0,
-                  clusters=None,
-                  cor_threshold=0.9):
+                  seed=0):
 
-    points, clusters, indices = extract_points(E,
-                                               second_order, 
-                                               tangent_bases, 
-                                               normal_info, 
-                                               K,
-                                               seed=seed,
-                                               clusters=clusters,
-                                               cor_threshold=cor_threshold)
+    points, indices = extract_points(E,
+                                     clusters,
+                                     second_order, 
+                                     tangent_bases, 
+                                     normal_info, 
+                                     K,
+                                     seed=seed)
 
     # annotate points with sign / penalty info
     # need logic for interior vs. boundary
@@ -162,36 +160,19 @@ def extract_peaks(E,
         peaks.append(annotate_point(point,
                                     sign,
                                     penalty))
-    return peaks, clusters, indices
+    return peaks, indices
 
 def extract_points(E,
+                   clusters,
                    second_order, # second order info (value, ambient gradient, ambient hessian) at each point in E
                    tangent_bases, # basis for tangent space at each point in E
                    normal_info, # normal basis and normal constraint at each point in E
                    K,
-                   seed=0,
-                   clusters=None,
-                   cor_threshold=0.9):
+                   seed=0):
 
     rng = np.random.default_rng(seed) # for picking representatives in cluster
 
     locations = np.array([g[E] for g in K.grid]).T
-
-    if clusters is None:
-        if len(locations) > 1:
-            HClust = AgglomerativeClustering
-            hc = HClust(distance_threshold=1-cor_threshold,
-                        n_clusters=None,
-                        metric='precomputed',
-                        linkage='single')
-            C = K.C00(locations,
-                      locations)
-            diagC = np.diag(C)
-            C /= np.multiply.outer(np.sqrt(diagC), np.sqrt(diagC))
-            hc.fit(1 - C)
-            clusters = hc.labels_
-        else:
-            clusters = np.array([0])
 
     points = []
     indices = []
@@ -274,9 +255,33 @@ def extract_points(E,
                                   )
             
         points.append(point)
+        print(idx, tuple([e[idx] for e in E]), 'idx')
+        print([e for e in E])
         indices.append(tuple([e[idx] for e in E]))
 
-    return points, clusters, indices                
+    return points, np.asarray(indices)
+
+def default_clusters(E,
+                     kernel,
+                     cor_threshold=0.9):
+    K = kernel
+    locations = np.array([g[E] for g in K.grid]).T
+
+    if len(locations) > 1:
+        HClust = AgglomerativeClustering
+        hc = HClust(distance_threshold=1-cor_threshold,
+                    n_clusters=None,
+                    metric='precomputed',
+                    linkage='single')
+        C = K.C00(locations,
+                  locations)
+        diagC = np.diag(C)
+        C /= np.multiply.outer(np.sqrt(diagC), np.sqrt(diagC))
+        hc.fit(1 - C)
+        clusters = hc.labels_
+    else:
+        clusters = np.array([0])
+    return clusters
 
 def annotate_point(point,
                    sign,

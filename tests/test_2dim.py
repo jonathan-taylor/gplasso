@@ -5,20 +5,21 @@ import numpy as np
 import pandas as pd
 
 from gplasso.kernel_calcs import covariance_structure
-from gplasso.peaks import extract_peaks, extract_points
+from gplasso.peaks import extract_peaks, extract_points, default_clusters
 from gplasso.taylor_expansion import taylor_expansion_window
 from gplasso.general_inference import LASSOInference
 from gplasso.gplasso import fit_gp_lasso
 
 def instance(seed=10,
-             svd_info=None):
+             svd_info=None,
+             plot=False):
 
     if seed is not None:
         rng = np.random.default_rng(seed)
     else:
         rng = np.random.default_rng()
         
-    nx, ny = 31, 51
+    nx, ny = 41, 51
     
     xval = np.linspace(-5,5,nx)
     yval = np.linspace(-3,8,ny)
@@ -38,47 +39,61 @@ def instance(seed=10,
     omega = K_omega.sample()
     
     penalty_weights = 2 * np.sqrt(1 + var_random) * np.ones_like(Z)
-    E, soln, subgrad = fit_gp_lasso(Z + omega,
-                                    [K, K_omega],
-                                    penalty_weights)
 
+    lasso = LASSOInference(Z,
+                           penalty_weights,
+                           K,
+                           K_omega,
+                           inference_kernel=None)
+
+    E, soln, subgrad = lasso.fit()
     signs = np.sign(subgrad[E])
 
+    # this is 2d grid specific
+    
     second_order = taylor_expansion_window((xval, yval),
-                                           [Z, omega],
+                                           [Z, lasso.perturbation_],
                                            np.nonzero(E))
 
     tangent_bases = [np.identity(2) for _ in range(len(E))]
     normal_info = [(np.zeros((0, 2)), np.zeros((0, 0))) for _ in range(len(E))]
 
     E_nz = np.nonzero(E)
+    signs = np.sign(subgrad[E])
 
-    peaks, clusters, _ = extract_peaks(E_nz,
-                                       second_order,
-                                       tangent_bases,
-                                       normal_info,
-                                       K,
-                                       signs,
-                                       penalty_weights,
-                                       seed=1)
+    clusters = default_clusters(E,
+                                K,
+                                cor_threshold=0.9)
+
+    print(E_nz, 'E_nz')
+    peaks, idx = lasso.extract_peaks(E_nz,
+                                     clusters,
+                                     signs,
+                                     second_order,
+                                     tangent_bases,
+                                     normal_info)
+
+    if plot:
+        fig, ax = plt.subplots(figsize=(8, 10))
+        ax = plt.gca()
+        im = ax.imshow(Z.T, cmap='coolwarm')
+        fig.colorbar(im, ax=ax, alpha=0.5)
+        ax.scatter(E_nz[0][signs==1], E_nz[1][signs==1], c='r', s=70)
+        ax.scatter(E_nz[0][signs==-1], E_nz[1][signs==-1], c='b', s=70)
+        ax.scatter(idx[:,0], idx[:,1], c='k', marker='x', s=100)
 
     inactive = np.ones(soln.shape, bool)
     for i, j in zip(*E_nz):
         inactive[max(i-2, 0):(i+2),
                  max(j-2, 0):(j+2)] = 0
 
-    info = LASSOInference(peaks,
+    lasso.setup_inference(peaks,
                           inactive,
-                          subgrad,
-                          penalty_weights,
-                          K,
-                          K_omega,
-                          inference_kernel=None,
-                          displacement=True)
+                          subgrad)
 
-    pivot_carve, disp_carve = info.summary(one_sided=False,
-                                           param=None,
-                                           level=0.9)
+    pivot_carve, disp_carve = lasso.summary(one_sided=False,
+                                            param=None,
+                                            level=0.9)
 
     return pivot_carve, svd_info
 
