@@ -29,22 +29,13 @@ def instance(seed=10,
     K = covariance_structure.gaussian(precision=precision,
                                       grid=grid)
 
-    if svd_info is None:
-        S_ = K.C00(None, None).reshape(nx*ny, nx*ny)
-        A, D = np.linalg.svd(S_)[:2]
-        svd_info = A, D
-    else:
-        A, D = svd_info
-        
-    Z = A @ (np.sqrt(D) * rng.standard_normal(nx*ny))
-    Z = Z.reshape((nx, ny))
+    Z = K.sample()
 
     proportion = 0.8
     var_random = (1 - proportion) / proportion
     K_omega = covariance_structure.gaussian(precision=precision,
                                             grid=grid, var=var_random)
-    omega = A @ (np.sqrt(D) * rng.standard_normal(nx*ny) * np.sqrt(var_random))
-    omega = omega.reshape((nx, ny))
+    omega = K_omega.sample()
     
     penalty_weights = 2 * np.sqrt(1 + var_random) * np.ones_like(Z)
     E, soln, subgrad = fit_gp_lasso(Z + omega,

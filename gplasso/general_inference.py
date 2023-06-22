@@ -77,11 +77,13 @@ class LASSOInference(object):
                  randomizer_kernel,
                  displacement=False,
                  inference_kernel=None,
+                 proportion=0.8,
                  extra_points=[]):
 
         if inference_kernel is None:
             inference_kernel = model_kernel
-
+        self.proportion = proportion
+        
         self.data_peaks = []
         self.random_peaks = []
         self.extra_points = []
@@ -205,7 +207,11 @@ class LASSOInference(object):
                                              C00i)
         self.barrier_info = self._form_barrier(C00i)
 
+    def randomize(self):
 
+        self._omega = self.randomizer_kernel.sample()
+        return self._omega
+    
     def summary(self,
                 level=0.90,
                 displacement_level=0.90,
