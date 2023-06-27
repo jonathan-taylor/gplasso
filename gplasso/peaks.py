@@ -136,7 +136,7 @@ def extract_peaks(E,
                   K,
                   signs,
                   penalty_weights,
-                  seed=0):
+                  rng=None):
 
     points, indices = extract_points(E,
                                      clusters,
@@ -144,7 +144,7 @@ def extract_peaks(E,
                                      tangent_bases, 
                                      normal_info, 
                                      K,
-                                     seed=seed)
+                                     rng=rng)
 
     # annotate points with sign / penalty info
     # need logic for interior vs. boundary
@@ -168,9 +168,12 @@ def extract_points(E,
                    tangent_bases, # basis for tangent space at each point in E
                    normal_info, # normal basis and normal constraint at each point in E
                    K,
-                   seed=0):
+                   rng=None):
 
-    rng = np.random.default_rng(seed) # for picking representatives in cluster
+    if rng is None:
+        rng = np.random.default_rng()
+    elif type(rng) == int:
+        rng = np.random.default_rng(rng)
 
     locations = np.array([g[E] for g in K.grid]).T
 

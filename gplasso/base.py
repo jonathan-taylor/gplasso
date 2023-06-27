@@ -15,7 +15,7 @@ from jax import jacfwd
 from .kernel_calcs import covariance_structure
 from .optimization_problem import barrier as barrier_nojax
 from .optimization_problem import logdet as logdet_nojax
-from .gplasso import fit_gp_lasso
+from .fit_gplasso import fit_gp_lasso
 
 from .peaks import (get_gradient,
                     get_tangent_gradient,
@@ -90,6 +90,43 @@ class LASSOInference(object):
                                    model_kernel,
                                    randomizer_kernel,
                                    inference_kernel)
+
+    def fit(self,
+            perturbation=None):
+        
+        # fit the GP lasso
+        if perturbation is None:
+            perturbation = self.randomizer_kernel.sample()
+        self.perturbation_ = perturbation
+        MK, RK = self.model_kernel, self.randomizer_kernel
+        E, soln, subgrad = fit_gp_lasso(self.Z + self.perturbation_,
+                                        [MK, RK],
+                                        self.penalty)
+
+        return E, soln, subgrad
+
+    def extract_peaks(self,
+                      E_nz,
+                      signs,
+                      second_order,
+                      tangent_bases,
+                      normal_info,
+                      clusters=None,
+                      rng=None): # rng for choosing a representative from a cluster
+
+        if clusters is None:
+            clusters = np.arange(E_nz[0].shape[0])
+        peaks, idx = extract_peaks(E_nz,
+                                   clusters,
+                                   second_order,
+                                   tangent_bases,
+                                   normal_info,
+                                   self.model_kernel,
+                                   signs,
+                                   self.penalty,
+                                   rng=rng)
+
+        return peaks, idx
 
     def setup_inference(self,
                         peaks,
@@ -213,43 +250,6 @@ class LASSOInference(object):
                                              C00i)
         self.barrier_info = self._form_barrier(C00i)
 
-    def fit(self,
-            perturbation=None):
-        
-        # fit the GP lasso
-        if perturbation is None:
-            perturbation = self.randomizer_kernel.sample()
-        self.perturbation_ = perturbation
-        MK, RK = self.model_kernel, self.randomizer_kernel
-        E, soln, subgrad = fit_gp_lasso(self.Z + self.perturbation_,
-                                        [MK, RK],
-                                        self.penalty)
-
-        return E, soln, subgrad
-
-    def extract_peaks(self,
-                      E_nz,
-                      signs,
-                      second_order,
-                      tangent_bases,
-                      normal_info,
-                      clusters=None,
-                      seed=1): # seed for choosing a representative from a cluster
-
-        if clusters is None:
-            clusters = np.arange(E_nz[0].shape[0])
-        peaks, idx = extract_peaks(E_nz,
-                                   clusters,
-                                   second_order,
-                                   tangent_bases,
-                                   normal_info,
-                                   self.model_kernel,
-                                   signs,
-                                   self.penalty,
-                                   seed=seed)
-
-        return peaks, idx
-    
     def summary(self,
                 level=0.90,
                 displacement_level=0.90,
@@ -329,7 +329,7 @@ class LASSOInference(object):
         # other derivatives if we don't use jax
 
         grad0_ = lambda W: (B.gradient(G_barrier_ @ W + N_barrier_, G_barrier_) +
-                           L.gradient(G_logdet_ @ W + N_logdet_, G_logdet @ L_beta))
+                            L.gradient(G_logdet_ @ W + N_logdet_, G_logdet @ L_beta))
         hess11_ = hess_
         hess10_ = lambda W: (B.hessian(G_barrier_ @ W + N_barrier_, G_barrier_, G_barrier @ L_beta) +
                              L.hessian(G_logdet_ @ W + N_logdet_, G_logdet_, G_logdet @ L_beta))

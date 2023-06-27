@@ -35,8 +35,7 @@ def instance(seed=10,
     var_random = (1 - proportion) / proportion
     K_omega = covariance_structure.gaussian(precision=precision,
                                             grid=grid, var=var_random)
-    omega = K_omega.sample()
-    
+
     penalty_weights = 2 * np.sqrt(1 + var_random) * np.ones_like(Z)
 
     lasso = LASSOInference(Z,
@@ -69,7 +68,8 @@ def instance(seed=10,
                                      second_order,
                                      tangent_bases,
                                      normal_info,
-                                     clusters=clusters)
+                                     clusters=clusters,
+                                     rng=rng)
 
     if plot:
         fig, ax = plt.subplots(figsize=(8, 10))
@@ -97,7 +97,7 @@ def instance(seed=10,
 
 def test_2d():
 
-    instance()
+    instance(seed=10)
     
 
 if __name__ == '__main__':
