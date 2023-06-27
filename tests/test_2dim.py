@@ -4,11 +4,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from gplasso.kernel_calcs import covariance_structure
-from gplasso.peaks import extract_peaks, extract_points, default_clusters
-from gplasso.taylor_expansion import taylor_expansion_window
-from gplasso.general_inference import LASSOInference
-from gplasso.gplasso import fit_gp_lasso
+from gplasso.api import (covariance_structure,
+                         default_clusters,
+                         taylor_expansion_window,
+                         LASSOInference)
 
 def instance(seed=10,
              svd_info=None,

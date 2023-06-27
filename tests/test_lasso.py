@@ -3,13 +3,8 @@ import matplotlib.pyplot as plt
 
 import numpy as np
 import pandas as pd
-from gplasso.kernel_calcs import covariance_structure, discrete_structure
-from gplasso.peaks import extract_peaks, extract_points
-from gplasso.taylor_expansion import taylor_expansion_window
-from gplasso.randomized_inference import setup_inference, inference
-from gplasso.general_inference import LASSOInference
-
-import regreg.api as rr
+from gplasso.api import (discrete_structure,
+                         LASSOInference)
 
 def instance(seed=10,
              svd_info=None):
