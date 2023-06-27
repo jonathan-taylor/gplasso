@@ -5,3 +5,4 @@ from .peaks import default_clusters
 from .taylor_expansion import taylor_expansion_window
 
 from .discrete import DiscreteLASSOInference
+from .gridded import GridLASSOInference

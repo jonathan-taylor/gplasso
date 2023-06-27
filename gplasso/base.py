@@ -28,14 +28,6 @@ from .peaks import (get_gradient,
 
 DEBUG = False
 
-class DisplacementEstimate(NamedTuple):
-
-    location: np.ndarray
-    segment: np.ndarray
-    cov: np.ndarray
-    factor: float
-    quantile: float
-
 class RegressionInfo(NamedTuple):
 
     T: np.ndarray
@@ -72,7 +64,6 @@ class PointWithSlices(NamedTuple):
 class LASSOInference(object):
 
     def __init__(self,
-                 Z,
                  penalty,
                  model_kernel,
                  randomizer_kernel,
@@ -81,23 +72,23 @@ class LASSOInference(object):
         if inference_kernel is None:
             inference_kernel = model_kernel
 
-        (self.Z,
-         self.penalty,
+        (self.penalty,
          self.model_kernel,
          self.randomizer_kernel,
-         self.inference_kernel) = (Z,
-                                   penalty,
+         self.inference_kernel) = (penalty,
                                    model_kernel,
                                    randomizer_kernel,
                                    inference_kernel)
 
     def fit(self,
-            perturbation=None):
+            Z,
+            perturbation=None,
+            rng=None):
         
         # fit the GP lasso
         if perturbation is None:
-            perturbation = self.randomizer_kernel.sample()
-        self.perturbation_ = perturbation
+            perturbation = self.randomizer_kernel.sample(rng=rng)
+        self.Z, self.perturbation_ = Z, perturbation
         MK, RK = self.model_kernel, self.randomizer_kernel
         E, soln, subgrad = fit_gp_lasso(self.Z + self.perturbation_,
                                         [MK, RK],

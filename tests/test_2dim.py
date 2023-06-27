@@ -6,8 +6,7 @@ import pandas as pd
 
 from gplasso.api import (covariance_structure,
                          default_clusters,
-                         taylor_expansion_window,
-                         LASSOInference)
+                         GridLASSOInference)
 
 def instance(seed=10,
              svd_info=None,
@@ -38,39 +37,30 @@ def instance(seed=10,
 
     penalty_weights = 2 * np.sqrt(1 + var_random) * np.ones_like(Z)
 
-    lasso = LASSOInference(Z,
-                           penalty_weights,
-                           K,
-                           K_omega,
-                           inference_kernel=None)
+    lasso = GridLASSOInference((xval, yval),
+                               penalty_weights,
+                               K,
+                               K_omega,
+                               inference_kernel=None)
 
-    E, soln, subgrad = lasso.fit(rng=rng)
+    E, soln, subgrad = lasso.fit(Z,
+                                 rng=rng)
     signs = np.sign(subgrad[E])
 
     # this is 2d grid specific
     
-    second_order = taylor_expansion_window((xval, yval),
-                                           [Z, lasso.perturbation_],
-                                           np.nonzero(E))
-
-    tangent_bases = [np.identity(2) for _ in range(len(E))]
-    normal_info = [(np.zeros((0, 2)), np.zeros((0, 0))) for _ in range(len(E))]
-
-    E_nz = np.nonzero(E)
-    signs = np.sign(subgrad[E])
-
     clusters = default_clusters(E,
                                 K,
                                 cor_threshold=0.9)
 
-    peaks, idx = lasso.extract_peaks(E_nz,
+    peaks, idx = lasso.extract_peaks(E,
                                      signs,
-                                     second_order,
-                                     tangent_bases,
-                                     normal_info,
-                                     clusters=clusters,
-                                     rng=rng)
+                                     Z,
+                                     lasso.perturbation_,
+                                     rng=rng,
+                                     clusters=clusters)
 
+    E_nz = np.nonzero(E)
     if plot:
         fig, ax = plt.subplots(figsize=(8, 10))
         ax = plt.gca()

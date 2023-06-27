@@ -29,14 +29,13 @@ def instance(seed=10,
     
     penalty_weights = 2 * np.sqrt(1 + var_random) * np.ones_like(Z)
 
-    lasso = DiscreteLASSOInference(Z,
-                                   penalty_weights,
+    lasso = DiscreteLASSOInference(penalty_weights,
                                    K,
                                    K_omega,
                                    inference_kernel=None)
 
-    E, soln, subgrad = lasso.fit(rng=rng)
-    signs = np.sign(subgrad[E])
+    E, soln, subgrad = lasso.fit(Z,
+                                 rng=rng)
 
     omega = lasso.perturbation_
 

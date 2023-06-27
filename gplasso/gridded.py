@@ -12,11 +12,11 @@ from scipy.stats import chi2
 import jax
 from jax import jacfwd
 
-from .optimization_problem import barrier as barrier_nojax
-from .optimization_problem import logdet as logdet_nojax
 from .base import (LASSOInference,
                    PointWithSlices,
                    RegressionInfo)
+
+from .taylor_expansion import taylor_expansion_window
 
 from .peaks import (get_gradient,
                     get_tangent_gradient,
@@ -27,28 +27,88 @@ from .peaks import (get_gradient,
                     extract_peaks,
                     extract_points)
 
+from .optimization_problem import barrier as barrier_nojax
+from .optimization_problem import logdet as logdet_nojax
+
 DEBUG = False
 
-class DiscreteLASSOInference(LASSOInference):
+class DisplacementEstimate(NamedTuple):
 
+    location: np.ndarray
+    segment: np.ndarray
+    cov: np.ndarray
+    factor: float
+    quantile: float
+
+class RegressionInfo(NamedTuple):
+
+    T: np.ndarray
+    N: np.ndarray
+    L_beta: np.ndarray
+    L_NZ: np.ndarray
+    est_matrix: np.ndarray
+    sqrt_cov_R: np.ndarray
+    cov_beta_T: np.ndarray
+    cov_beta_TN: np.ndarray
+    
+class PointWithSlices(NamedTuple):
+
+    point: Point
+    value_idx: int    # index into col of cov for value coords
+    gradient_slice: slice # index into col of cov for gradient coords
+    hessian_slice: slice # index into row/col of Hessian for each peak
+
+    def get_value(self, arr):
+        return arr[self.value_idx]
+
+    def set_value(self, arr, val):
+        arr[self.value_idx] = val
+
+    def get_gradient(self, arr):
+        return arr[self.gradient_slice]
+
+    def set_gradient(self, arr, grad):
+        arr[self.gradient_slice] =  grad
+
+    def get_hessian_block(self, arr):
+        return arr[self.hessian_slice]
+
+class GridLASSOInference(LASSOInference):
+
+    def __init__(self,
+                 gridvals,
+                 penalty,
+                 model_kernel,
+                 randomizer_kernel,
+                 inference_kernel=None):
+
+        self.gridvals = gridvals
+        LASSOInference.__init__(self,
+                                penalty,
+                                model_kernel,
+                                randomizer_kernel,
+                                inference_kernel=inference_kernel)
+        
     def extract_peaks(self,
                       E,
                       signs,
                       Z,
-                      perturbation): # rng for choosing a representative from a cluster
+                      perturbation,
+                      clusters=None,
+                      rng=None): # rng for choosing a representative from a cluster
 
-        E_nz = np.nonzero(E)
+        ndim = len(self.gridvals)
         npt = E.sum()
-        second_order = []
-        for i in E_nz[0]:
-            second_order.append((np.array([Z[i], perturbation[i]]),
-                                 np.zeros((2,0)),
-                                 np.zeros((2,0,0))))
+        E_nz = np.nonzero(E)
+        second_order = taylor_expansion_window(self.gridvals,
+                                               [Z, perturbation],
+                                               np.nonzero(E))
 
-        tangent_bases = [np.identity(0) for _ in range(npt)]
-        normal_info = [(np.zeros((0, 0)), np.zeros((0, 0))) for _ in range(npt)]
-        clusters = np.arange(npt)
+        tangent_bases = [np.identity(ndim) for _ in range(npt)]
+        normal_info = [(np.zeros((0, ndim)), np.zeros((0, 0))) for _ in range(npt)]
 
+        if clusters is None:
+            clusters = np.arange(E_nz[0].shape[0])
         peaks, idx = extract_peaks(E_nz,
                                    clusters,
                                    second_order,
@@ -57,7 +117,7 @@ class DiscreteLASSOInference(LASSOInference):
                                    self.model_kernel,
                                    signs,
                                    self.penalty,
-                                   rng=None)
+                                   rng=rng)
 
         return peaks, idx
 
@@ -76,10 +136,8 @@ class DiscreteLASSOInference(LASSOInference):
         self.extra_points = []
         idx = 0
         hess_idx = 0
-
-        ngrad = 0 # this is LASSO, no gradient component
         for peak in peaks:
-
+            ngrad = peak.gradient.shape[1]
             data_peak = peak._replace(value=peak.value[0],
                                       gradient=peak.gradient[0],
                                       hessian=peak.hessian[0],
@@ -100,7 +158,7 @@ class DiscreteLASSOInference(LASSOInference):
             random_peak_slice = PointWithSlices(point=random_peak,
                                                 value_idx=idx,
                                                 gradient_slice=slice(idx + 1,
-                                                                     idx + 1 + ngrad),
+                                                                    idx + 1 + ngrad),
                                                 hessian_slice=data_peak_slice.hessian_slice)
             self.data_peaks.append(data_peak_slice)
             self.random_peaks.append(random_peak_slice)
@@ -112,7 +170,7 @@ class DiscreteLASSOInference(LASSOInference):
             extra_point_slice = PointWithSlices(point=point,
                                                 value_idx=idx,
                                                 gradient_slice=slice(idx + 1,
-                                                                     idx + 1 + ngrad),
+                                                                    idx + 1 + ngrad),
                                                 hessian_slice=None)
             self.extra_points.append(extra_point_slice)
             idx += (1 + ngrad)
