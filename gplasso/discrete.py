@@ -115,7 +115,7 @@ class DiscreteLASSOInference(object):
         E_nz = np.nonzero(E)
         npt = E.sum()
         second_order = []
-        for i in range(npt):
+        for i in E_nz[0]:
             second_order.append((np.array([Z[i], perturbation[i]]),
                                  np.zeros((2,0)),
                                  np.zeros((2,0,0))))
@@ -124,7 +124,6 @@ class DiscreteLASSOInference(object):
         normal_info = [(np.zeros((0, 0)), np.zeros((0, 0))) for _ in range(npt)]
         clusters = np.arange(npt)
 
-        print(npt, 'npt')
         peaks, idx = extract_peaks(E_nz,
                                    clusters,
                                    second_order,
@@ -135,7 +134,6 @@ class DiscreteLASSOInference(object):
                                    self.penalty,
                                    rng=None)
 
-        print(peaks)
         return peaks, idx
 
     def setup_inference(self,

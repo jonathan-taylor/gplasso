@@ -39,8 +39,6 @@ def instance(seed=10,
     signs = np.sign(subgrad[E])
 
     omega = lasso.perturbation_
-    print(soln)
-    print(omega[:4])
 
     if E.sum() > 0:
 
