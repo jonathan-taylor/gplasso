@@ -79,6 +79,8 @@ class covariance_structure(object):
 
         if rng is None:
             rng = np.random.default_rng()
+        elif type(rng) == int:
+            rng = np.random.default_rng(rng)
 
         if self._svd_info is None:
             S_ = self.C00(None, None)
