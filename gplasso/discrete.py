@@ -135,6 +135,7 @@ class DiscreteLASSOInference(object):
                                    self.penalty,
                                    rng=None)
 
+        print(peaks)
         return peaks, idx
 
     def setup_inference(self,
