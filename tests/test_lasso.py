@@ -42,16 +42,6 @@ def instance(seed=10,
 
     E, soln, subgrad = lasso.fit()
     signs = np.sign(subgrad[E])
-
-    # S_r = S_ * (1 + var_random)
-    # loss = rr.quadratic_loss(Z.shape[0], Q=S_r)
-    # linear_term = rr.identity_quadratic(0, 0, -Z-omega,0)
-    # penalty = rr.weighted_l1norm(penalty_weights, lagrange=1)
-    # problem = rr.simple_problem(loss,
-    #                             penalty)
-    # soln = problem.solve(linear_term, min_its=200, tol=1e-12)
-    # E = soln != 0
-    # subgrad = Z+omega - S_r @ soln
     
     omega = lasso.perturbation_
     if E.sum() > 0:

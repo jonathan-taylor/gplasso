@@ -213,10 +213,13 @@ class LASSOInference(object):
                                              C00i)
         self.barrier_info = self._form_barrier(C00i)
 
-    def fit(self):
+    def fit(self,
+            perturbation=None):
         
         # fit the GP lasso
-        self.perturbation_ = self.randomizer_kernel.sample()
+        if perturbation is None:
+            perturbation = self.randomizer_kernel.sample()
+        self.perturbation_ = perturbation
         MK, RK = self.model_kernel, self.randomizer_kernel
         E, soln, subgrad = fit_gp_lasso(self.Z + self.perturbation_,
                                         [MK, RK],
