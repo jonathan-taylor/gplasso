@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from gplasso.api import (discrete_structure,
-                         LASSOInference)
+                         DiscreteLASSOInference)
 
 def instance(seed=10,
              svd_info=None):
@@ -29,13 +29,14 @@ def instance(seed=10,
     
     penalty_weights = 2 * np.sqrt(1 + var_random) * np.ones_like(Z)
 
-    lasso = LASSOInference(Z,
-                           penalty_weights,
-                           K,
-                           K_omega,
-                           inference_kernel=None)
+    lasso = DiscreteLASSOInference(Z,
+                                   penalty_weights,
+                                   K,
+                                   K_omega,
+                                   inference_kernel=None)
 
-    E, soln, subgrad = lasso.fit()
+    print('seed', seed)
+    E, soln, subgrad = lasso.fit(rng=rng)
     signs = np.sign(subgrad[E])
     
     omega = lasso.perturbation_
@@ -43,25 +44,13 @@ def instance(seed=10,
 
         signs = np.sign(subgrad[E])
 
-        second_order = []
-        for i in np.nonzero(E)[0]:
-            second_order.append((np.array([Z[i], omega[i]]),
-                                 np.zeros((2,0)),
-                                 np.zeros((2,0,0))))
-
-        tangent_bases = [np.identity(0) for _ in range(len(E))]
-        normal_info = [(np.zeros((0, 0)), np.zeros((0, 0))) for _ in range(len(E))]
-
-        E_nz = np.nonzero(E)
-
-        peaks, idx = lasso.extract_peaks(E_nz,
+        peaks, idx = lasso.extract_peaks(E,
                                          signs,
-                                         second_order,
-                                         tangent_bases,
-                                         normal_info)
+                                         Z,
+                                         omega)
 
         inactive = np.ones(soln.shape, bool)
-        inactive[E_nz] = 0
+        inactive[E] = 0
 
         lasso.setup_inference(peaks,
                               inactive,
@@ -77,7 +66,7 @@ def instance(seed=10,
 
 def test_lasso():
 
-    instance()
+    instance(seed=10)
 
 if __name__ == '__main__':
 
