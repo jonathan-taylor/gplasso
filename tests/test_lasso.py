@@ -21,7 +21,7 @@ def instance(seed=10,
     
     K = discrete_structure(S)
 
-    Z = K.sample()
+    Z = K.sample(rng=rng)
 
     proportion = 0.8
     var_random = (1 - proportion) / proportion
@@ -35,10 +35,9 @@ def instance(seed=10,
                                    K_omega,
                                    inference_kernel=None)
 
-    print('seed', seed)
     E, soln, subgrad = lasso.fit(rng=rng)
     signs = np.sign(subgrad[E])
-    
+
     omega = lasso.perturbation_
     if E.sum() > 0:
 

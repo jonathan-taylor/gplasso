@@ -29,7 +29,7 @@ def instance(seed=10,
     K = covariance_structure.gaussian(precision=precision,
                                       grid=grid)
 
-    Z = K.sample()
+    Z = K.sample(rng=rng)
 
     proportion = 0.8
     var_random = (1 - proportion) / proportion
@@ -44,7 +44,7 @@ def instance(seed=10,
                            K_omega,
                            inference_kernel=None)
 
-    E, soln, subgrad = lasso.fit()
+    E, soln, subgrad = lasso.fit(rng=rng)
     signs = np.sign(subgrad[E])
 
     # this is 2d grid specific
