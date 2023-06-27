@@ -1,7 +1,7 @@
 from copy import deepcopy
 from functools import partial
 from itertools import product
-from typing import NamedTuple
+from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
@@ -28,7 +28,8 @@ from .peaks import (get_gradient,
 
 DEBUG = False
 
-class RegressionInfo(NamedTuple):
+@dataclass
+class RegressionInfo(object):
 
     T: np.ndarray
     N: np.ndarray
@@ -39,7 +40,8 @@ class RegressionInfo(NamedTuple):
     cov_beta_T: np.ndarray
     cov_beta_TN: np.ndarray
     
-class PointWithSlices(NamedTuple):
+@dataclass
+class PointWithSlices(object):
 
     point: Point
     value_idx: int    # index into col of cov for value coords

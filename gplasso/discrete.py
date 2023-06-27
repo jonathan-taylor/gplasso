@@ -1,7 +1,7 @@
 from copy import deepcopy
 from functools import partial
 from itertools import product
-from typing import NamedTuple
+from dataclasses import dataclass, asdict, astuple
 
 import numpy as np
 import pandas as pd
@@ -80,10 +80,13 @@ class DiscreteLASSOInference(LASSOInference):
         ngrad = 0 # this is LASSO, no gradient component
         for peak in peaks:
 
-            data_peak = peak._replace(value=peak.value[0],
-                                      gradient=peak.gradient[0],
-                                      hessian=peak.hessian[0],
-                                      n_obs=1)
+            data_peak = asdict(peak)
+            data_peak.update(value=peak.value[0],
+                             gradient=peak.gradient[0],
+                             hessian=peak.hessian[0],
+                             n_obs=1)
+
+            data_peak = type(peak)(**data_peak)
             data_peak_slice = PointWithSlices(point=data_peak,
                                               value_idx=idx,
                                               gradient_slice=slice(idx + 1,
@@ -92,11 +95,12 @@ class DiscreteLASSOInference(LASSOInference):
             idx += (1 + ngrad)
             hess_idx += ngrad
             
-            random_peak = peak._replace(value=peak.value[1],
-                                        gradient=peak.gradient[1],
-                                        hessian=peak.hessian[1],
-                                        n_obs=1)
-
+            random_peak = asdict(peak)
+            random_peak.update(value=peak.value[1],
+                               gradient=peak.gradient[1],
+                               hessian=peak.hessian[1],
+                               n_obs=1)
+            random_peak = type(peak)(**random_peak)
             random_peak_slice = PointWithSlices(point=random_peak,
                                                 value_idx=idx,
                                                 gradient_slice=slice(idx + 1,
@@ -205,7 +209,7 @@ class DiscreteLASSOInference(LASSOInference):
          est_matrix,
          sqrt_cov_R,
          cov_beta_T,
-         cov_beta_TN) = self.regress_decomp
+         cov_beta_TN) = astuple(self.regress_decomp)
 
         first_order = self.first_order
         offset = L_NZ @ N @ first_order

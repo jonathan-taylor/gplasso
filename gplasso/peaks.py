@@ -1,24 +1,26 @@
-from typing import NamedTuple
-from collections import namedtuple
+from dataclasses import dataclass, asdict
 
 import numpy as np
 from sklearn.cluster import AgglomerativeClustering
 
 from .taylor_expansion import taylor_expansion_window
 
-class Point(NamedTuple):
+@dataclass
+class Point(object):
 
     location: np.ndarray
     value: np.ndarray
 
-class Peak(NamedTuple):
+@dataclass
+class Peak(object):
 
     location: np.ndarray
     value: np.ndarray
     penalty: float
     sign: int
 
-class InteriorPoint(NamedTuple):
+@dataclass
+class InteriorPoint(object):
 
     location: np.ndarray
     value: np.ndarray
@@ -29,7 +31,8 @@ class InteriorPoint(NamedTuple):
     n_ambient: int # how many spatial dimensions
     n_tangent: int # how many tangent dimensions
 
-class BoundaryPoint(NamedTuple):
+@dataclass
+class BoundaryPoint(object):
 
     location: np.ndarray
     value: np.ndarray
@@ -43,7 +46,8 @@ class BoundaryPoint(NamedTuple):
     n_tangent: int # how many tangent dimensions
     n_normal: int # how many normal dimensions
 
-class InteriorPeak(NamedTuple):
+@dataclass
+class InteriorPeak(object):
 
     location: np.ndarray
     value: np.ndarray
@@ -56,7 +60,8 @@ class InteriorPeak(NamedTuple):
     n_ambient: int # how many spatial dimensions (ambient)
     n_tangent: int # how many tangent dimensions
 
-class BoundaryPeak(NamedTuple):
+@dataclass
+class BoundaryPeak(object):
 
     location: np.ndarray
     value: np.ndarray
@@ -288,7 +293,7 @@ def annotate_point(point,
                    sign,
                    penalty):
 
-    vals = point._asdict()
+    vals = asdict(point)
 
     vals.update({'sign':sign,
                  'penalty':penalty})

@@ -1,7 +1,7 @@
 from copy import deepcopy
 from functools import partial
 from itertools import product
-from typing import NamedTuple
+from dataclasses import dataclass, asdict, astuple
 
 import numpy as np
 import pandas as pd
@@ -32,46 +32,14 @@ from .optimization_problem import logdet as logdet_nojax
 
 DEBUG = False
 
-class DisplacementEstimate(NamedTuple):
+@dataclass
+class DisplacementEstimate(object):
 
     location: np.ndarray
     segment: np.ndarray
     cov: np.ndarray
     factor: float
     quantile: float
-
-class RegressionInfo(NamedTuple):
-
-    T: np.ndarray
-    N: np.ndarray
-    L_beta: np.ndarray
-    L_NZ: np.ndarray
-    est_matrix: np.ndarray
-    sqrt_cov_R: np.ndarray
-    cov_beta_T: np.ndarray
-    cov_beta_TN: np.ndarray
-    
-class PointWithSlices(NamedTuple):
-
-    point: Point
-    value_idx: int    # index into col of cov for value coords
-    gradient_slice: slice # index into col of cov for gradient coords
-    hessian_slice: slice # index into row/col of Hessian for each peak
-
-    def get_value(self, arr):
-        return arr[self.value_idx]
-
-    def set_value(self, arr, val):
-        arr[self.value_idx] = val
-
-    def get_gradient(self, arr):
-        return arr[self.gradient_slice]
-
-    def set_gradient(self, arr, grad):
-        arr[self.gradient_slice] =  grad
-
-    def get_hessian_block(self, arr):
-        return arr[self.hessian_slice]
 
 class GridLASSOInference(LASSOInference):
 
@@ -138,10 +106,12 @@ class GridLASSOInference(LASSOInference):
         hess_idx = 0
         for peak in peaks:
             ngrad = peak.gradient.shape[1]
-            data_peak = peak._replace(value=peak.value[0],
-                                      gradient=peak.gradient[0],
-                                      hessian=peak.hessian[0],
-                                      n_obs=1)
+            data_peak = asdict(peak)
+            data_peak.update(value=peak.value[0],
+                             gradient=peak.gradient[0],
+                             hessian=peak.hessian[0],
+                             n_obs=1)
+            data_peak = type(peak)(**data_peak)
             data_peak_slice = PointWithSlices(point=data_peak,
                                               value_idx=idx,
                                               gradient_slice=slice(idx + 1,
@@ -150,11 +120,13 @@ class GridLASSOInference(LASSOInference):
             idx += (1 + ngrad)
             hess_idx += ngrad
             
-            random_peak = peak._replace(value=peak.value[1],
-                                        gradient=peak.gradient[1],
-                                        hessian=peak.hessian[1],
-                                        n_obs=1)
+            random_peak = asdict(peak)
+            random_peak.update(value=peak.value[1],
+                               gradient=peak.gradient[1],
+                               hessian=peak.hessian[1],
+                               n_obs=1)
 
+            random_peak = type(peak)(**random_peak)
             random_peak_slice = PointWithSlices(point=random_peak,
                                                 value_idx=idx,
                                                 gradient_slice=slice(idx + 1,
@@ -263,7 +235,7 @@ class GridLASSOInference(LASSOInference):
          est_matrix,
          sqrt_cov_R,
          cov_beta_T,
-         cov_beta_TN) = self.regress_decomp
+         cov_beta_TN) = astuple(self.regress_decomp)
 
         first_order = self.first_order
         offset = L_NZ @ N @ first_order
