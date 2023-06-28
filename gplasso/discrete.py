@@ -74,8 +74,9 @@ class DiscreteLASSOInference(LASSOInference):
         self._data_peaks = data_peaks
         self._random_peaks = random_peaks
         self._extra_points = extra_points_
-        self._model_points = data_peaks + extra_points_
+        self._sufficient_points = data_peaks + extra_points_
         self.model_locations = [(l,) for l in model_locations] # for sorting summary df later
+        self._model_points = [p for p in self._sufficient_points if tuple(p.point.location) in self.model_locations]
         
         return E_nz
     
@@ -110,7 +111,7 @@ class DiscreteLASSOInference(LASSOInference):
         # compute the first order data
 
         self.first_order = np.zeros(cov.shape[0])
-        for p in self._model_points + self._random_peaks:
+        for p in self._sufficient_points + self._random_peaks:
             p.set_value(self.first_order, p.point.value)
 
         locations = [p.point.location for p in self._random_peaks]
@@ -223,7 +224,7 @@ class DiscreteLASSOInference(LASSOInference):
 
         # first fill in values for the covariance of the data
 
-        for peaks_l, peaks_r, K in [(self._model_points, self._model_points, IK),
+        for peaks_l, peaks_r, K in [(self._sufficient_points, self._sufficient_points, IK),
                                     (self._random_peaks, self._random_peaks, RK)]:
             for p_l in peaks_l:
                 for p_r in peaks_r:
@@ -314,7 +315,7 @@ class DiscreteLASSOInference(LASSOInference):
 
         # fill in covariance with data and extra points
 
-        for peaks, K in [(self._model_points, IK),
+        for peaks, K in [(self._sufficient_points, IK),
                          (self._random_peaks, RK)]:
             for p in peaks:
                 p.set_value(pre_proj, K.C00([p.point.location],

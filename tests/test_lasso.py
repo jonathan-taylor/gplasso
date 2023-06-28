@@ -9,6 +9,7 @@ from gplasso.api import (discrete_structure,
 def instance(seed=10,
              svd_info=None,
              nextra=0,
+             ndrop=0,
              s=3):
     """
     fit a misspecified lasso, select a few extra coordinates
@@ -54,8 +55,12 @@ def instance(seed=10,
 
         signs = np.sign(subgrad[E])
 
-        extra_points = rng.choice(p, nextra)
-        model_points = np.unique(np.hstack([np.nonzero(E)[0], tuple(extra_points)]).astype(int))
+        extra_points = rng.choice(p, nextra, replace=False)
+        selected_points = np.nonzero(E)[0]
+        if ndrop > 0:
+            ndrop = min(ndrop, selected_points.shape[0])
+            selected_points = rng.choice(selected_points, selected_points.shape[0] - ndrop, replace=False)
+        model_points = np.unique(np.hstack([selected_points, tuple(extra_points)]).astype(int))
         print(model_points)
         
         inactive = np.ones(soln.shape, bool)
@@ -88,7 +93,7 @@ if __name__ == '__main__':
 
     for _ in range(2000):
         try:
-            df, svd_info = instance(seed=None, svd_info=svd_info, nextra=2)
+            df, svd_info = instance(seed=None, svd_info=svd_info, nextra=2, ndrop=2)
             if df is not None:
                 dfs.append(df)
         except KeyboardInterrupt:
