@@ -12,18 +12,14 @@ class Point(object):
     value: np.ndarray
 
 @dataclass
-class Peak(object):
+class Peak(Point):
 
-    location: np.ndarray
-    value: np.ndarray
     penalty: float
     sign: int
 
 @dataclass
-class InteriorPoint(object):
+class InteriorPoint(Point):
 
-    location: np.ndarray
-    value: np.ndarray
     gradient: np.ndarray
     hessian: np.ndarray
     tangent_basis: np.ndarray
@@ -32,49 +28,20 @@ class InteriorPoint(object):
     n_tangent: int # how many tangent dimensions
 
 @dataclass
-class BoundaryPoint(object):
+class BoundaryPoint(InteriorPoint):
 
-    location: np.ndarray
-    value: np.ndarray
-    gradient: np.ndarray
-    hessian: np.ndarray
-    tangent_basis: np.ndarray
     normal_basis: np.ndarray
     normal_constraint: np.ndarray
-    n_obs: int # how many fields are observed here
-    n_ambient: int # how many spatial dimensions (ambient)
-    n_tangent: int # how many tangent dimensions
     n_normal: int # how many normal dimensions
 
-@dataclass
-class InteriorPeak(object):
-
-    location: np.ndarray
-    value: np.ndarray
-    gradient: np.ndarray
-    hessian: np.ndarray
-    tangent_basis: np.ndarray
-    penalty: float
-    sign: int
-    n_obs: int # how many fields are observed here
-    n_ambient: int # how many spatial dimensions (ambient)
-    n_tangent: int # how many tangent dimensions
 
 @dataclass
-class BoundaryPeak(object):
+class InteriorPeak(InteriorPoint, Peak):
+    pass
 
-    location: np.ndarray
-    value: np.ndarray
-    gradient: np.ndarray
-    hessian: np.ndarray
-    tangent_basis: np.ndarray
-    normal_basis: np.ndarray
-    normal_constraint: np.ndarray
-    penalty: float
-    sign: int
-    n_obs: int # how many fields are observed here
-    n_ambient: int # how many spatial dimensions (ambient)
-    n_normal: int # how many normal dimensions
+@dataclass
+class BoundaryPeak(BoundaryPoint, Peak):
+    pass
 
 def get_gradient(pt):
     tangent = get_tangent_gradient(pt)
@@ -298,9 +265,14 @@ def annotate_point(point,
     vals.update({'sign':sign,
                  'penalty':penalty})
 
-    if isinstance(point, Point):
-        return Peak(**vals)
-    elif isinstance(point, InteriorPoint):
-        return InteriorPeak(**vals)
-    elif isinstance(point, BoundaryPoint):
-        return BoundaryPeak(**vals)
+    mapping = {Point: Peak,
+               InteriorPoint: InteriorPeak,
+               BoundaryPoint: BoundaryPeak}
+    cls = mapping[type(point)]
+    return cls(**vals)
+    # if isinstance(point, Point):
+    #     return Peak(**vals)
+    # elif isinstance(point, InteriorPoint):
+    #     return InteriorPeak(**vals)
+    # elif isinstance(point, BoundaryPoint):
+    #     return BoundaryPeak(**vals)

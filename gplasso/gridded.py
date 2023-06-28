@@ -13,8 +13,9 @@ import jax
 from jax import jacfwd
 
 from .base import (LASSOInference,
-                   PointWithSlices,
-                   RegressionInfo)
+                   PointWithSlices)
+
+from .utils import RegressionInfo
 
 from .taylor_expansion import taylor_expansion_window
 

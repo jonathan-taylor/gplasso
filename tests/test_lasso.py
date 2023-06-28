@@ -7,7 +7,8 @@ from gplasso.api import (discrete_structure,
                          DiscreteLASSOInference)
 
 def instance(seed=10,
-             svd_info=None):
+             svd_info=None,
+             nextra=0):
 
     if seed is not None:
         rng = np.random.default_rng(seed)
@@ -16,23 +17,24 @@ def instance(seed=10,
         
     p = 50
 
-    W = rng.standard_normal((1000,p))
-    S = W.T @ W / 1000
+    W = rng.standard_normal((100,p))
+    S = W.T @ W / 100
+    S += 0.6
     
     K = discrete_structure(S)
-
+    D = discrete_structure(np.diag(np.linspace(1, 1.5, p)))
     Z = K.sample(rng=rng)
 
     proportion = 0.8
     var_random = (1 - proportion) / proportion
-    K_omega = discrete_structure(var_random * S)
+    K_omega = discrete_structure(var_random * np.diag(np.linspace(1, 1.5, p)))
     
     penalty_weights = 2 * np.sqrt(1 + var_random) * np.ones_like(Z)
 
     lasso = DiscreteLASSOInference(penalty_weights,
-                                   K,
+                                   D,
                                    K_omega,
-                                   inference_kernel=None)
+                                   inference_kernel=K)
 
     E, soln, subgrad = lasso.fit(Z,
                                  rng=rng)
@@ -43,23 +45,20 @@ def instance(seed=10,
 
         signs = np.sign(subgrad[E])
 
-        peaks, idx = lasso.extract_peaks(E,
-                                         signs,
-                                         Z,
-                                         omega)
-
+        extra_points = rng.choice(p, nextra)
+        model_points = np.hstack([np.nonzero(E)[0], tuple(extra_points)])
+        lasso.extract_peaks(model_points)
+        
         inactive = np.ones(soln.shape, bool)
         inactive[E] = 0
 
-        lasso.setup_inference(peaks,
-                              inactive,
-                              subgrad)
+        lasso.setup_inference(inactive)
 
-        pivot_carve, disp_carve = lasso.summary(one_sided=False,
-                                                param=None,
-                                                level=0.9)
+        pvalue_carve = lasso.summary(one_sided=False,
+                                     param=None,
+                                     level=0.9)
 
-        return pivot_carve, svd_info
+        return pvalue_carve, svd_info
     else:
         return None, None
 
@@ -76,7 +75,7 @@ if __name__ == '__main__':
 
     for _ in range(2000):
         try:
-            df, svd_info = instance(seed=None, svd_info=svd_info)
+            df, svd_info = instance(seed=None, svd_info=svd_info, nextra=2)
             if df is not None:
                 dfs.append(df)
         except KeyboardInterrupt:

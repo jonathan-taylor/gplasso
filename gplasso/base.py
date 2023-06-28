@@ -29,18 +29,6 @@ from .peaks import (get_gradient,
 DEBUG = False
 
 @dataclass
-class RegressionInfo(object):
-
-    T: np.ndarray
-    N: np.ndarray
-    L_beta: np.ndarray
-    L_NZ: np.ndarray
-    est_matrix: np.ndarray
-    sqrt_cov_R: np.ndarray
-    cov_beta_T: np.ndarray
-    cov_beta_TN: np.ndarray
-    
-@dataclass
 class PointWithSlices(object):
 
     point: Point
@@ -96,6 +84,8 @@ class LASSOInference(object):
                                         [MK, RK],
                                         self.penalty)
 
+        self.E_, self.soln, self.subgrad = E, soln, subgrad
+        
         return E, soln, subgrad
 
     def extract_peaks(self,

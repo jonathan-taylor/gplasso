@@ -1,6 +1,15 @@
+from dataclasses import dataclass
+
 import numpy as np
 from scipy.special import gamma
 from string import ascii_lowercase
+
+@dataclass
+class SecondOrderExpansion(object):
+
+    value: float
+    gradient: np.ndarray
+    hessian: np.ndarray
 
 def taylor_expansion(X_pred,
                      X_obs,
