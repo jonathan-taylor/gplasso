@@ -8,7 +8,12 @@ from gplasso.api import (discrete_structure,
 
 def instance(seed=10,
              svd_info=None,
-             nextra=0):
+             nextra=0,
+             s=3):
+    """
+    fit a misspecified lasso, select a few extra coordinates
+    and make some confidence intervals
+    """
 
     if seed is not None:
         rng = np.random.default_rng(seed)
@@ -19,11 +24,15 @@ def instance(seed=10,
 
     W = rng.standard_normal((100,p))
     S = W.T @ W / 100
-    S += 0.6
+    S[:5,:5] += 0.2
+    beta = np.zeros(p)
+    supp = rng.choice(p, s)
+    beta[supp] = rng.normal(s) + 2 * rng.choice([-1,1], s)
     
     K = discrete_structure(S)
     D = discrete_structure(np.diag(np.linspace(1, 1.5, p)))
-    Z = K.sample(rng=rng)
+    Z_mean = S @ beta 
+    Z = K.sample(rng=rng) + Z_mean
 
     proportion = 0.8
     var_random = (1 - proportion) / proportion
@@ -46,19 +55,23 @@ def instance(seed=10,
         signs = np.sign(subgrad[E])
 
         extra_points = rng.choice(p, nextra)
-        model_points = np.hstack([np.nonzero(E)[0], tuple(extra_points)])
-        lasso.extract_peaks(model_points)
+        model_points = np.unique(np.hstack([np.nonzero(E)[0], tuple(extra_points)]).astype(int))
+        print(model_points)
         
         inactive = np.ones(soln.shape, bool)
         inactive[E] = 0
 
-        lasso.setup_inference(inactive)
+        lasso.setup_inference(inactive,
+                              model_points)
 
-        pvalue_carve = lasso.summary(one_sided=False,
-                                     param=None,
-                                     level=0.9)
+        param = np.linalg.inv(S[model_points][:,model_points]) @ Z_mean[model_points]
+        param = pd.DataFrame({'Param': param,
+                              'Location': lasso.model_locations}).set_index('Location')
+        pivot_carve = lasso.summary(one_sided=False,
+                                    param=param,
+                                    level=0.9)
 
-        return pvalue_carve, svd_info
+        return pivot_carve, svd_info
     else:
         return None, None
 
@@ -84,6 +97,12 @@ if __name__ == '__main__':
             print(e)
             pass
         if len(dfs) > 0:
-            pval = pd.concat(dfs)['P-value (2-sided)']
-            print(np.nanmean(pval), np.nanstd(pval), np.nanmean(pval < 0.05))
+            df_ = pd.concat(dfs)
+            pval = df_['P-value (2-sided)']
+            print(np.nanmean(pval),
+                  np.nanstd(pval),
+                  np.nanmean(pval < 0.05),
+                  np.nanmean((df_['Param'] < df_['U (90%)']) *
+                             (df_['Param'] > df_['L (90%)'])))
+
     

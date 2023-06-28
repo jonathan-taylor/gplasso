@@ -10,19 +10,13 @@ import jax.numpy as jnp
 import jax
 from jax import jacfwd
 
-from .optimization_problem import barrier as barrier_nojax
-from .optimization_problem import logdet as logdet_nojax
 from .base import (LASSOInference,
                    PointWithSlices)
 from .utils import (mle_summary,
                     regression_decomposition,
                     _compute_mle,
                     _obj_maker)
-from .peaks import (get_gradient,
-                    get_tangent_gradient,
-                    get_normal_gradient,
-                    get_hessian,
-                    Peak,
+from .peaks import (Peak,
                     Point,
                     extract_peaks,
                     extract_points)
@@ -31,8 +25,8 @@ DEBUG = False
 
 class DiscreteLASSOInference(LASSOInference):
 
-    def extract_peaks(self,
-                      model_locations=[]): 
+    def _extract_peaks(self,
+                       model_locations=[]): 
 
         Z, perturbation = self.Z, self.perturbation_
         E_nz = np.nonzero(self.E_)[0]
@@ -81,15 +75,17 @@ class DiscreteLASSOInference(LASSOInference):
         self._random_peaks = random_peaks
         self._extra_points = extra_points_
         self._model_points = data_peaks + extra_points_
-        self._model_locations = [(l,) for l in model_locations] # for sorting summary df later
+        self.model_locations = [(l,) for l in model_locations] # for sorting summary df later
         
         return E_nz
     
     def setup_inference(self,
-                        inactive):
+                        inactive,
+                        model_points=None):
 
         self.inactive = inactive
 
+        self._extract_peaks(model_points)
         cov = self.cov = self._compute_cov()
         self.prec = np.linalg.inv(self.cov)
         
@@ -182,37 +178,39 @@ class DiscreteLASSOInference(LASSOInference):
                 param=None):
 
         if param is None:
-            param = np.zeros(len(self._data_peaks) + len(self._extra_points))
+            param = pd.DataFrame({'Param': np.zeros(len(self._data_peaks) + len(self._extra_points)),
+                                  'Location': self.model_locations})
+            if one_sided:
+                param['Signs'] = np.array([p.point.sign for p in self._data_peaks])
 
-        mle, mle_cov = self._solve_MLE()
+            param = param.set_index('Location')
             
-        height_mle, loc_mle = mle[:len(self._data_peaks)], mle[len(self._data_peaks):]
-        peaks = self._data_peaks
-        height_param = param[:len(self._data_peaks)]
-        height_SD = np.sqrt(np.diag(mle_cov)[:len(self._data_peaks)])
-        height_Z = (height_mle - height_param) / height_SD
-
-        signs = np.array([p.point.sign for p in self._data_peaks])
-
-        df = pd.DataFrame({'Location':[tuple(p.point.location) for p in self._data_peaks],
-                           'Estimate':height_mle,
-                           'SD':height_SD,
-                           'Param':height_param})
+        mle, mle_cov = self._solve_MLE()
+        
+        mle_df = pd.DataFrame({'Estimate':mle,
+                               'SD':np.sqrt(np.diag(mle_cov)),
+                               'Location':[tuple(p.point.location) for p in self._model_points]})
+        mle_df = mle_df.set_index('Location')
+        joined_df = pd.merge(param,
+                             mle_df,
+                             left_index=True,
+                             right_index=True)
+                                 
         if one_sided:
-            df = mle_summary(mle,
-                             np.sqrt(np.diag(mle_cov)),
-                             param=param,
-                             signs=signs,
+            df = mle_summary(joined_df['Estimate'],
+                             joined_df['SD'],
+                             param=joined_df['Param'],
+                             signs=joined_df['Signs'],
                              level=level)
         else:
-            df = mle_summary(mle,
-                             np.sqrt(np.diag(mle_cov)),
-                             param=param,
+            df = mle_summary(joined_df['Estimate'],
+                             joined_df['SD'],
+                             param=joined_df['Param'],
                              level=level)
         df['Location'] = [tuple(p.point.location) for p in self._model_points]
 
         df = df.set_index('Location')
-        return df.loc[self._model_locations]
+        return df.loc[self.model_locations]
     
     # private methods
 
