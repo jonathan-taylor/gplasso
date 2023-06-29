@@ -28,8 +28,10 @@ from .peaks import (get_gradient,
                     extract_peaks,
                     extract_points)
 
-from .optimization_problem import barrier as barrier_nojax
-from .optimization_problem import logdet as logdet_nojax
+from .utils import (mle_summary,
+                    regression_decomposition,
+                    _compute_mle,
+                    _obj_maker)
 
 DEBUG = False
 
@@ -58,6 +60,10 @@ class GridLASSOInference(LASSOInference):
                                 randomizer_kernel,
                                 inference_kernel=inference_kernel)
         
+    # def extract_peaks(self,
+    #                   model_locations=[],
+    #                   clusters=None): 
+
     def extract_peaks(self,
                       E,
                       signs,
@@ -76,8 +82,6 @@ class GridLASSOInference(LASSOInference):
         tangent_bases = [np.identity(ndim) for _ in range(npt)]
         normal_info = [(np.zeros((0, ndim)), np.zeros((0, 0))) for _ in range(npt)]
 
-        if clusters is None:
-            clusters = np.arange(E_nz[0].shape[0])
         peaks, idx = extract_peaks(E_nz,
                                    clusters,
                                    second_order,

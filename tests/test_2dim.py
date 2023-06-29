@@ -52,13 +52,8 @@ def instance(seed=10,
     clusters = default_clusters(E,
                                 K,
                                 cor_threshold=0.9)
-
-    peaks, idx = lasso.extract_peaks(E,
-                                     signs,
-                                     Z,
-                                     lasso.perturbation_,
-                                     rng=rng,
-                                     clusters=clusters)
+    model_locations = np.array([xval[E], yval[E]]).T[clusters]
+    idx = lasso.extract_peaks(model_locations)
 
     E_nz = np.nonzero(E)
     if plot:
