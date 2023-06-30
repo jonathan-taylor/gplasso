@@ -17,8 +17,6 @@ from .base import (LASSOInference,
 
 from .utils import RegressionInfo
 
-from .taylor_expansion import second_order_expansion
-
 from .peaks import (get_gradient,
                     get_tangent_gradient,
                     get_normal_gradient,
@@ -900,97 +898,41 @@ def _compute_random_model_cov(peaks,
     return C00i, M, G_blocks
 
 
-def mle_summary(mle,
-                SD,
-                param=None,
-                signs=None,
-                level=None):
-    """
-    Wald-like summary
-    """
+@dataclass
+class Expansion(object):
 
-    if param is None:
-        param = np.zeros_like(mle)
-    Z = (mle - param) / SD
-
-    if signs is not None:
-        one_sided = False
-        P = normal_dbn.sf(Z * signs)
-    else:
-        one_sided = False
-        P = normal_dbn.cdf(Z)
-        P = 2 * np.minimum(P, 1-P)
-    df = pd.DataFrame({'Estimate':mle,
-                       'SD':SD,
-                       'Param':param})
-    if one_sided:
-        df['P-value (1-sided)'] = P
-    else:
-        df['P-value (2-sided)'] = 2 * np.minimum(P, 1 - P)
-
-    if level is not None:
-        q = normal_dbn.ppf(1 - (1 - level) / 2)
-        df['L ({:.0%})'.format(level)] = mle - q * SD
-        df['U ({:.0%})'.format(level)] = mle + q * SD
-
-    return df
-
-def regression_decomposition(cov, T, N):
+    value: np.ndarray
+    gradient: np.ndarray
+    hessian: np.ndarray
+    index: np.ndarray
+    location: np.ndarray
     
-    nT, nN = T.shape[0], N.shape[0]
-    
-    TN = np.concatenate([T, N], axis=0)
-    cov_TN = TN @ cov @ TN.T
-    prec_TN = np.linalg.inv(cov_TN)
-    
-    # Cov(TZ|NZ)
-    cov_TgN = np.linalg.inv(prec_TN[:nT,:nT])
-    
-    M = np.zeros_like(prec_TN)
-    M[:nT,:nT] = cov_TgN
-    M[:nT,nT:] = cov_TN[:nT,nT:] @ np.linalg.inv(cov_TN[nT:,nT:])
-    M[nT:,nT:] = np.identity(nN)
-    
-    L = cov @ TN.T @ prec_TN @ M
-    
-    # compute the difference in covariance matrices of the
-    # two estimators
+def second_order_expansion(G,
+                           Z,  
+                           I):
 
-    cov_beta_TN = prec_TN[:nT,:nT]
-    
-    cov_T = T @ cov @ T.T
-    cov_beta_T = np.linalg.inv(cov_T)
+    value = []
 
-    L_beta = L[:,:nT]
-    L_NZ = L[:,nT:]
+    Z = np.asarray(Z)
+    Z = Z
+    grad = np.gradient(Z, *G)
+    grad = np.array(grad)
+    hess = [np.gradient(g, *G) for g in grad]
 
-    # compute the estimation matrix, i.e.
-    # the matrix that computes the T coords
-    # of beta_{N cup T}
-
-    est_matrix = prec_TN[:nT] @ TN
-
-    # find a square root of the
-    # covariance of the residual matrix
-
-    cov_R = cov - cov @ TN.T @ prec_TN @ TN @ cov
-    U, D, _ = np.linalg.svd(cov_R)
-
-    p = cov.shape[0]
-    rank_R = p - nN - nT # assumes prec_TN is full rank
-                         # we would have had an exception
-                         # earlier when computing prec_TN if exactly singular 
-                         # it's possible rank(cov_R) is smaller if cov wasn't full rank
-                         # BUT, we have definitely assumed TN @ cov @ TN.T is full rank
-    U = U[:,:rank_R]
-    D = D[:rank_R]
-    sqrt_cov_R = U * np.sqrt(D)[None,:]
-
-    return RegressionInfo(T,
-                          N,
-                          L_beta,
-                          L_NZ,
-                          est_matrix,
-                          sqrt_cov_R,
-                          cov_beta_T,
-                          cov_beta_TN)
+    hess = np.array(hess)
+    value = []
+    for idx in I:
+        item_ = idx # (slice(None,None,None),) + idx
+        val_idx = Z[item_]
+        item_ = (slice(None,None,None),) + item_
+        grad_idx = grad[item_]
+        item_ = (slice(None,None,None),) + item_
+        hess_idx = hess[item_]
+        hess_idx = np.array([(h + h.T)/2 for h in hess_idx])
+        value.append(Expansion(value=val_idx,
+                               gradient=grad_idx,
+                               hessian=hess_idx,
+                               index=idx,
+                               location=tuple([g[i] for i, g in zip(idx, G)])))
+                
+    return value

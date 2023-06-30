@@ -60,18 +60,18 @@ def instance(seed=10,
         if ndrop > 0:
             ndrop = min(ndrop, selected_points.shape[0])
             selected_points = rng.choice(selected_points, selected_points.shape[0] - ndrop, replace=False)
-        model_points = np.unique(np.hstack([selected_points, tuple(extra_points)]).astype(int))
-        print(model_points)
+        model_spec = np.unique(np.hstack([selected_points, tuple(extra_points)]).astype(int))
+        print(model_spec)
         
         inactive = np.ones(soln.shape, bool)
         inactive[E] = 0
 
         lasso.setup_inference(inactive,
-                              model_points)
+                              model_spec)
 
-        param = np.linalg.inv(S[model_points][:,model_points]) @ Z_mean[model_points]
+        param = np.linalg.inv(S[model_spec][:,model_spec]) @ Z_mean[model_spec]
         param = pd.DataFrame({'Param': param,
-                              'Location': lasso.model_locations}).set_index('Location')
+                              'Location': lasso.model_spec}).set_index('Location')
         pivot_carve = lasso.summary(one_sided=False,
                                     param=param,
                                     level=0.9)
