@@ -8,6 +8,29 @@ from gplasso.api import (covariance_structure,
                          default_clusters,
                          GridLASSOInference)
 
+from joblib import Memory
+location = './cachedir'
+memory = Memory(location, verbose=0)
+
+def compute_svd_info(xval,
+                     yval,
+                     precision,
+                     var=1):
+
+    grid = np.meshgrid(xval, yval, indexing='ij')
+    K = covariance_structure.gaussian(precision=precision,
+                                      grid=grid,
+                                      var=var)
+    S_ = K.C00(None, None)
+    npt = int(np.sqrt(np.product(S_.shape)))
+    shape = S_.shape[:len(S_.shape)//2]
+    S_ = S_.reshape(npt, npt)
+    A, D = np.linalg.svd(S_)[:2]
+
+    return A, D, npt, shape
+compute_svd_info = memory.cache(compute_svd_info)
+
+
 def instance(seed=10,
              svd_info=None,
              plot=False):
@@ -25,15 +48,27 @@ def instance(seed=10,
     grid = np.meshgrid(xval, yval, indexing='ij')
 
     precision = np.diag([1.4, 2.1])
+
+    svd_info = compute_svd_info(xval,
+                                yval,
+                                precision)
     K = covariance_structure.gaussian(precision=precision,
-                                      grid=grid)
+                                      grid=grid,
+                                      svd_info=svd_info)
 
     Z = K.sample(rng=rng)
 
     proportion = 0.8
     var_random = (1 - proportion) / proportion
+    svd_info_rand = compute_svd_info(xval,
+                                     yval,
+                                     precision,
+                                     var=var_random)
+
     K_omega = covariance_structure.gaussian(precision=precision,
-                                            grid=grid, var=var_random)
+                                            grid=grid,
+                                            var=var_random,
+                                            svd_info=svd_info_rand)
 
     penalty_weights = 2 * np.sqrt(1 + var_random) * np.ones_like(Z)
 
@@ -45,16 +80,21 @@ def instance(seed=10,
 
     E, soln, subgrad = lasso.fit(Z,
                                  rng=rng)
-    signs = np.sign(subgrad[E])
 
     # this is 2d grid specific
     
-    clusters = default_clusters(E,
-                                K,
-                                cor_threshold=0.9)
-    model_locations = np.array([xval[E], yval[E]]).T[clusters]
-    idx = lasso.extract_peaks(model_locations)
+    cluster_df = default_clusters(E,
+                                  K,
+                                  cor_threshold=0.9)
+    selection = []
 
+    for label in np.unique(cluster_df['Cluster']):
+        cur_df = cluster_df[lambda df: cluster_df['Cluster'] == label]
+        selection.append(cur_df.iloc[rng.choice(cur_df.shape[0], 1)])
+    selection = pd.concat(selection)
+
+    model_spec = lasso.extract_peaks(selection['Index'])
+    
     E_nz = np.nonzero(E)
     if plot:
         fig, ax = plt.subplots(figsize=(8, 10))
@@ -70,9 +110,8 @@ def instance(seed=10,
         inactive[max(i-2, 0):(i+2),
                  max(j-2, 0):(j+2)] = 0
 
-    lasso.setup_inference(peaks,
-                          inactive,
-                          subgrad)
+    lasso.setup_inference(inactive,
+                          model_spec=model_spec)
 
     pivot_carve, disp_carve = lasso.summary(one_sided=False,
                                             param=None,

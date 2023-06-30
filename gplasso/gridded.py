@@ -13,18 +13,18 @@ import jax
 from jax import jacfwd
 
 from .base import (LASSOInference,
-                   PointWithSlices)
+                   PointWithSlices as PointWithSlicesBase)
 
 from .utils import RegressionInfo
 
-from .taylor_expansion import taylor_expansion_window
+from .taylor_expansion import second_order_expansion
 
 from .peaks import (get_gradient,
                     get_tangent_gradient,
                     get_normal_gradient,
                     get_hessian,
-                    Peak,
-                    Point,
+                    InteriorPeak,
+                    InteriorPoint,
                     extract_peaks,
                     extract_points)
 
@@ -34,6 +34,22 @@ from .utils import (mle_summary,
                     _obj_maker)
 
 DEBUG = False
+
+@dataclass
+class PointWithSlices(PointWithSlicesBase):
+
+    gradient_slice: slice # index into col of cov for gradient coords
+    hessian_slice: slice # index into row/col of Hessian for each peak
+    
+    def get_gradient(self, arr):
+        return arr[self.gradient_slice]
+
+    def set_gradient(self, arr, grad):
+        arr[self.gradient_slice] =  grad
+
+    def get_hessian_block(self, arr):
+        return arr[self.hessian_slice]
+
 
 @dataclass
 class DisplacementEstimate(object):
@@ -60,109 +76,142 @@ class GridLASSOInference(LASSOInference):
                                 randomizer_kernel,
                                 inference_kernel=inference_kernel)
         
-    # def extract_peaks(self,
-    #                   model_locations=[],
-    #                   clusters=None): 
-
+    def get_location(self, idx):
+        return tuple([g[i] for g, i in zip(self.gridvals, idx)])
+    
     def extract_peaks(self,
-                      E,
-                      signs,
-                      Z,
-                      perturbation,
-                      clusters=None,
-                      rng=None): # rng for choosing a representative from a cluster
+                      selected_idx,     # cluster representatives --
+                      model_spec=None): # model default does not use location intervals for now
+
+        selected_df = pd.DataFrame({}, index=selected_idx)
+        selected_df['Value'] = False
+        selected_df['Displacement'] = False
+        selected_df['Location'] = [self.get_location(idx) for idx in selected_df.index]
+        selected_df = selected_df.reset_index()
+        selected_df = selected_df.set_index(['Location', 'Index'])
+        
+        if model_spec is None:
+            model_spec = pd.DataFrame({'Value':[True] * len(selected_idx),
+                                       'Displacement':[False] * len(selected_idx)}, index=selected_idx)
+        model_spec['Location'] = [self.get_location(idx) for idx in model_spec.index]
+        model_spec = model_spec.reset_index()
+        model_spec = model_spec.set_index(['Location', 'Index'])
+        
+        selected_df = selected_df + model_spec[lambda df: df.index.isin(selected_df.index)] # could make some NaN's
+        # fix the NaN's
+        selected_df.loc[selected_df['Displacement'].isnull(), ['Displacement', 'Value']] = False
+        
+        # effects in model_spec not captured in selected_df -- by default will be empty
+        extra_df = model_spec[lambda df: ~ df.index.isin(selected_df.index)]
+        
+        sufficient_df = pd.concat([selected_df, extra_df]).reset_index().set_index('Location')
+        selected_df = selected_df.reset_index().set_index('Location')
+        extra_df = extra_df.reset_index().set_index('Location')
+
+        Z, perturbation = self.Z, self.perturbation_
+        selected_df['Sign'] = np.sign([self.subgrad[idx] for idx in selected_df['Index']])
+        selected_df['Penalty'] = [self.penalty[idx] for idx in selected_df['Index']]
 
         ndim = len(self.gridvals)
-        npt = E.sum()
-        E_nz = np.nonzero(E)
-        second_order = taylor_expansion_window(self.gridvals,
-                                               [Z, perturbation],
-                                               np.nonzero(E))
+        npt = sufficient_df.shape[0]
 
-        tangent_bases = [np.identity(ndim) for _ in range(npt)]
-        normal_info = [(np.zeros((0, ndim)), np.zeros((0, 0))) for _ in range(npt)]
+        # second order at each of the selected pts
 
-        peaks, idx = extract_peaks(E_nz,
-                                   clusters,
-                                   second_order,
-                                   tangent_bases,
-                                   normal_info,
-                                   self.model_kernel,
-                                   signs,
-                                   self.penalty,
-                                   rng=rng)
-
-        return peaks, idx
-
-    def setup_inference(self,
-                        peaks,
-                        inactive,
-                        subgrad,
-                        extra_points=[]):
-
-        (self.inactive,
-         self.subgrad) = (inactive,
-                          subgrad)
-
-        self.data_peaks = []
-        self.random_peaks = []
-        self.extra_points = []
         idx = 0
         hess_idx = 0
-        for peak in peaks:
-            ngrad = peak.gradient.shape[1]
-            data_peak = asdict(peak)
-            data_peak.update(value=peak.value[0],
-                             gradient=peak.gradient[0],
-                             hessian=peak.hessian[0],
-                             n_obs=1)
-            data_peak = type(peak)(**data_peak)
-            data_peak_slice = PointWithSlices(point=data_peak,
-                                              value_idx=idx,
-                                              gradient_slice=slice(idx + 1,
-                                                                   idx + 1 + ngrad),
-                                              hessian_slice=slice(hess_idx, hess_idx + ngrad))
-            idx += (1 + ngrad)
-            hess_idx += ngrad
+        self._data_peaks = []
+        self._random_peaks = []
+
+        for i, (data_pt, random_pt) in enumerate(zip(second_order_expansion(self.gridvals,
+                                                                            Z,
+                                                                            selected_df['Index']),
+                                                     second_order_expansion(self.gridvals,
+                                                                            perturbation,
+                                                                            selected_df['Index']))):
+            print(data_pt)
+            data_pt = InteriorPeak(location=data_pt.location,
+                                   index=data_pt.index,
+                                   sign=selected_df['Sign'][i],
+                                   penalty=selected_df['Penalty'][i],
+                                   value=data_pt.value,
+                                   gradient=data_pt.gradient,
+                                   hessian=data_pt.hessian,
+                                   tangent_basis=np.identity(data_pt.gradient.shape[0]),
+                                   n_obs=1,
+                                   n_ambient=ndim,
+                                   n_tangent=ndim)
+
+            self._data_peaks.append(PointWithSlices(point=data_pt,
+                                                    value_idx=idx,
+                                                    gradient_slice=slice(idx + 1,
+                                                                         idx + 1 + data_pt.n_ambient),
+                                                    hessian_slice=slice(hess_idx,
+                                                                        hess_idx + data_pt.n_ambient)))
+            idx += 1 + data_pt.n_ambient
+            hess_idx += data_pt.n_ambient
+
+            random_pt = InteriorPoint(location=random_pt.location,
+                                      index=random_pt.index,
+                                      value=random_pt.value,
+                                      gradient=random_pt.gradient,
+                                      hessian=random_pt.hessian,
+                                      tangent_basis=np.identity(random_pt.gradient.shape[0]),
+                                      n_obs=1,
+                                      n_ambient=ndim,
+                                      n_tangent=ndim)
+
+            self._random_peaks.append(PointWithSlices(point=random_pt,
+                                                      value_idx=idx,
+                                                      gradient_slice=slice(idx + 1,
+                                                                           idx + 1 + random_pt.n_ambient),
+                                                      hessian_slice=self._data_peaks[-1].hessian_slice))
+            idx += 1 + random_pt.n_ambient
+
+
+        self._extra_points = []
+        for extra_pt in second_order_expansion(self.gridvals,
+                                               Z,
+                                               extra_df['Index']):
+
+            extra_pt = InteriorPoint(location=extra_pt.location,
+                                     index=extra_pt.index,
+                                     value=extra_pt.value,
+                                     gradient=extra_pt.gradient,
+                                     hessian=None,
+                                     tangent_basis=np.identity(extra_pt.gradient.shape[0]),
+                                     n_obs=1,
+                                     n_ambient=ndim,
+                                     n_tangent=ndim)
+
+            self._extra_points.append(PointWithSlices(point=extra_pt,
+                                                      value_idx=idx,
+                                                      gradient_slice=slice(idx + 1,
+                                                                           idx + 1 + extra_pt.n_ambient),
+                                                      hessian_slice=None))
+
+            idx += 1 + extra_pt.n_ambient
             
-            random_peak = asdict(peak)
-            random_peak.update(value=peak.value[1],
-                               gradient=peak.gradient[1],
-                               hessian=peak.hessian[1],
-                               n_obs=1)
-
-            random_peak = type(peak)(**random_peak)
-            random_peak_slice = PointWithSlices(point=random_peak,
-                                                value_idx=idx,
-                                                gradient_slice=slice(idx + 1,
-                                                                    idx + 1 + ngrad),
-                                                hessian_slice=data_peak_slice.hessian_slice)
-            self.data_peaks.append(data_peak_slice)
-            self.random_peaks.append(random_peak_slice)
-
-            idx += (1 + ngrad)
-
-        for point in extra_points: # extra points should have no randomization
-            ngrad = point.gradient.shape[0]
-            extra_point_slice = PointWithSlices(point=point,
-                                                value_idx=idx,
-                                                gradient_slice=slice(idx + 1,
-                                                                    idx + 1 + ngrad),
-                                                hessian_slice=None)
-            self.extra_points.append(extra_point_slice)
-            idx += (1 + ngrad)
-
         cov_size = idx
-        hess_size = hess_idx
         cov = self.cov = self._compute_cov(cov_size)
         self.prec = np.linalg.inv(self.cov)
+
+        self._spec_df = sufficient_df
+        return model_spec
+
+    def setup_inference(self,
+                        inactive,
+                        model_spec=[]):
+
+        self.inactive = inactive
+
+        cov = self.cov 
         
         # we use our regression decomposition to rewrite this in terms of
         # our "best case" unbiased estimator (ie when no selection effect present)
         # the affine term in the Kac Rice formula and the corresponding residual of
         # (f_E, \omega_E, \nabla f_E, \nabla \omega_E) 
 
-        C00i, M, G_blocks = _compute_random_model_cov(self.data_peaks,
+        C00i, M, G_blocks = _compute_random_model_cov(self._data_peaks,
                                                       self.model_kernel, 
                                                       self.randomizer_kernel)
 
@@ -172,17 +221,20 @@ class GridLASSOInference(LASSOInference):
         # N is represents the random vector in the "0" of the Kac-Rice formula
 
         T = []
-        for p in self.data_peaks + self.extra_points:
-            value_col = np.zeros((cov.shape[0], 1))
-            p.set_value(value_col, 1)
+        for p in self._data_peaks + self._extra_points:
+            cols = []
+            if self._spec_df['Value'][p.point.location]:
+                value_col = np.zeros((cov.shape[0], 1))
+                p.set_value(value_col, 1)
+                cols.append(value_col)
+                
+            if self._spec_df['Displacement'][p.point.location]:
+                gradient_cols = np.zeros((cov.shape[0], p.point.n_ambient))
+                p.set_gradient(gradient_cols, np.identity(p.point.n_ambient))
+                cols.append(gradient_cols)
 
-            # TODO, each peak / extra point should have a flag as to whether
-            # their displacement is a parameter or not
-
-            ngrad = get_gradient(p.point).shape[0]
-            gradient_cols = np.zeros((cov.shape[0], ngrad))
-            p.set_gradient(gradient_cols, np.identity(ngrad))
-            T.append(np.concatenate([value_col, gradient_cols], axis=1).T)
+            if cols:
+                T.append(np.concatenate(cols, axis=1).T)
 
         T = np.concatenate(T, axis=0)
 
@@ -191,7 +243,7 @@ class GridLASSOInference(LASSOInference):
         N = []
 
         idx = 0 # restart counter
-        for i, (p_d, p_r) in enumerate(zip(self.data_peaks, self.random_peaks)):
+        for i, (p_d, p_r) in enumerate(zip(self._data_peaks, self._random_peaks)):
             ngrad = get_tangent_gradient(p_d.point).shape[0]
             N_cols = np.zeros((cov.shape[0], ngrad))
             p_d.set_gradient(N_cols, np.identity(ngrad))
@@ -203,18 +255,14 @@ class GridLASSOInference(LASSOInference):
 
         N = np.hstack(N).T
 
-        # why isn't this used? hmm...
-        NZ_obs = -M.T @ np.array([p.sign * p.penalty for p in peaks])
-
         self.regress_decomp = regression_decomposition(cov, T, N) 
 
         # compute the first order data
 
         self.first_order = np.zeros(cov.shape[0])
-        for p in self.data_peaks + self.random_peaks + self.extra_points:
+        for p in self._data_peaks + self._random_peaks + self._extra_points:
             p.set_value(self.first_order, p.point.value)
             p.set_gradient(self.first_order, get_gradient(p.point))
-
 
         self.logdet_info = self._form_logdet(G_blocks,
                                              C00i)
@@ -231,7 +279,7 @@ class GridLASSOInference(LASSOInference):
         logdet, G_logdet, N_logdet = self.logdet_info
 
         if param is None:
-            param = np.zeros(len(self.data_peaks))
+            param = np.zeros(len(self._data_peaks))
 
         (T,
          N,
@@ -366,10 +414,10 @@ class GridLASSOInference(LASSOInference):
             mle = beta_nosel
             mle_cov = cov_beta_TN
 
-        height_mle, loc_mle = mle[:len(self.data_peaks)], mle[len(self.data_peaks):]
-        peaks = self.data_peaks
-        height_param = param[:len(self.data_peaks)]
-        height_SD = np.sqrt(np.diag(mle_cov)[:len(self.data_peaks)])
+        height_mle, loc_mle = mle[:len(self._data_peaks)], mle[len(self._data_peaks):]
+        peaks = self._data_peaks
+        height_param = param[:len(self._data_peaks)]
+        height_SD = np.sqrt(np.diag(mle_cov)[:len(self._data_peaks)])
         height_Z = (height_mle - height_param) / height_SD
 
         if DEBUG:
@@ -377,9 +425,9 @@ class GridLASSOInference(LASSOInference):
             print(param, 'param')
             print(beta_nosel, 'no selection')
 
-        signs = np.array([p.point.sign for p in self.data_peaks])
+        signs = np.array([p.point.sign for p in self._data_peaks])
         P = normal_dbn.sf(height_Z * signs)
-        df = pd.DataFrame({'Location':[tuple(p.point.location) for p in self.data_peaks],
+        df = pd.DataFrame({'Location':[tuple(p.point.location) for p in self._data_peaks],
                            'Estimate':height_mle,
                            'SD':height_SD,
                            'Param':height_param})
@@ -394,7 +442,7 @@ class GridLASSOInference(LASSOInference):
                              height_SD,
                              param=height_param,
                              level=level)
-        df['Location'] = [tuple(p.point.location) for p in self.data_peaks]
+        df['Location'] = [tuple(p.point.location) for p in self._data_peaks]
 
         # # now confidence regions for the peaks
 
@@ -436,9 +484,9 @@ class GridLASSOInference(LASSOInference):
 
         # first fill in values for the covariance of the data
 
-        for peaks_l, peaks_r, K in [(self.data_peaks + self.extra_points,
-                                     self.data_peaks + self.extra_points, IK),
-                                    (self.random_peaks, self.random_peaks, RK)]:
+        for peaks_l, peaks_r, K in [(self._data_peaks + self._extra_points,
+                                     self._data_peaks + self._extra_points, IK),
+                                    (self._random_peaks, self._random_peaks, RK)]:
             for p_l in peaks_l:
                 for p_r in peaks_r:
                     cov[p_l.value_idx, p_r.value_idx] = K.C00([p_l.point.location],
@@ -568,10 +616,10 @@ class GridLASSOInference(LASSOInference):
         RK = self.randomizer_kernel
 
         blocks = []
-        for peak in self.data_peaks:
+        for peak in self._data_peaks:
             block = np.zeros(get_gradient(peak.point).shape*2 + self.cov.shape[:1])
 
-            for point in self.data_peaks + self.extra_points:
+            for point in self._data_peaks + self._extra_points:
                 C20_q = IK.C20([peak.point.location],
                                [point.point.location],
                                basis_l=peak.point.tangent_basis)[0,0] 
@@ -582,7 +630,7 @@ class GridLASSOInference(LASSOInference):
                 block[:,:,point.value_idx] = C20_q
                 block[:,:,point.gradient_slice] = C21_q
 
-            for point in self.random_peaks:
+            for point in self._random_peaks:
                 C20_q = RK.C20([peak.point.location],
                                [point.point.location],
                                basis_l=peak.point.tangent_basis)[0,0] 
@@ -600,7 +648,7 @@ class GridLASSOInference(LASSOInference):
         N = np.zeros((total_block_sizes, total_block_sizes))
 
         idx = 0
-        for block, p_d, p_r in zip(blocks, self.data_peaks, self.random_peaks):
+        for block, p_d, p_r in zip(blocks, self._data_peaks, self._random_peaks):
             H_slice = p_d.hessian_slice
             G[H_slice, H_slice, :] = block
             N[H_slice, H_slice] += -p_d.point.sign * get_hessian(p_d.point)
@@ -624,8 +672,8 @@ class GridLASSOInference(LASSOInference):
         G_regressMR = np.zeros_like(self.G_hess)
 
         idx = 0            
-        for q, block in zip(self.data_peaks, G_blocks):
-            for i, (p_d, p_r) in enumerate(zip(self.data_peaks, self.random_peaks)):
+        for q, block in zip(self._data_peaks, G_blocks):
+            for i, (p_d, p_r) in enumerate(zip(self._data_peaks, self._random_peaks)):
                 G_regressMR[q.hessian_slice,
                             q.hessian_slice,
                             p_d.value_idx] = block[:,:,i]
@@ -637,7 +685,7 @@ class GridLASSOInference(LASSOInference):
         # i.e. it is the corresponding irrepresentable matrix
 
         arg = np.zeros_like(self.first_order)
-        for p_d in self.data_peaks:
+        for p_d in self._data_peaks:
             p_d.set_value(arg, -p_d.point.sign * p_d.point.penalty)
 
         N_regressMR = np.einsum('ijk,k->ij', G_regressMR, arg)
@@ -651,23 +699,23 @@ class GridLASSOInference(LASSOInference):
         RK = self.randomizer_kernel
 
         D_ = np.zeros_like(self.N_hess)
-        E_ = np.zeros(self.N_hess.shape + (len(self.data_peaks),))
+        E_ = np.zeros(self.N_hess.shape + (len(self._data_peaks),))
         G_shape = np.zeros_like(self.G_hess)
 
         # matrix of inner products
         # these get scaled on right by diagonal
         # with blocks like s_j beta_j
 
-        for i, peak in enumerate(self.data_peaks):
+        for i, peak in enumerate(self._data_peaks):
             if peak.point.n_ambient > 0:
                 ngrad = get_tangent_gradient(peak.point).shape[0]
                 E_[peak.hessian_slice,
                    peak.hessian_slice,
                    i] = np.identity(ngrad)
 
-        locations = [q.point.location for q in self.data_peaks]
+        locations = [q.point.location for q in self._data_peaks]
 
-        for i, qs_l in enumerate(self.data_peaks):
+        for i, qs_l in enumerate(self._data_peaks):
             q_l = qs_l.point
             if q_l.n_ambient > 0:
                 c10_l = (MK.C10([q_l.location],
@@ -676,7 +724,7 @@ class GridLASSOInference(LASSOInference):
                          RK.C10([q_l.location],
                                 locations,
                                 basis_l=q_l.tangent_basis)[0].T) 
-                for j, qs_r in enumerate(self.data_peaks):
+                for j, qs_r in enumerate(self._data_peaks):
                     q_r = qs_r.point
                     if q_r.n_ambient > 0:
                         c11 = (MK.C11([q_l.location],
@@ -702,7 +750,7 @@ class GridLASSOInference(LASSOInference):
 
         arg = np.zeros_like(self.first_order)
 
-        for q_d in self.data_peaks:
+        for q_d in self._data_peaks:
             D_[q_d.hessian_slice] *= q_d.point.sign
             q_d.set_value(arg, q_d.get_value(arg) - q_d.point.sign * q_d.point.penalty)
 
@@ -711,8 +759,8 @@ class GridLASSOInference(LASSOInference):
                        E_,
                        C00i)
 
-        for i, (q_d, q_r) in enumerate(zip(self.data_peaks,
-                                           self.random_peaks)):
+        for i, (q_d, q_r) in enumerate(zip(self._data_peaks,
+                                           self._random_peaks)):
 
             G_shape[:,:,q_d.value_idx] = G_[:,:,i]
             G_shape[:,:,q_r.value_idx] = G_[:,:,i]
@@ -730,16 +778,16 @@ class GridLASSOInference(LASSOInference):
         IK = self.inference_kernel
 
         irrep = (MK.C00(None,
-                        [p.point.location for p in self.data_peaks]) +
+                        [p.point.location for p in self._data_peaks]) +
                  RK.C00(None,
-                        [p.point.location for p in self.data_peaks]))[self.inactive] @ C00i
+                        [p.point.location for p in self._data_peaks]))[self.inactive] @ C00i
 
         pre_proj = np.zeros(self.cov.shape[:1] + self.subgrad[self.inactive].shape[:1])
 
         # fill in covariance with data and extra points
 
-        for peaks, K in [(self.data_peaks + self.extra_points, IK),
-                         (self.random_peaks, RK)]:
+        for peaks, K in [(self._data_peaks + self._extra_points, IK),
+                         (self._random_peaks, RK)]:
             for p in peaks:
                 p.set_value(pre_proj, K.C00([p.point.location],
                                             None)[0, self.inactive])
@@ -749,24 +797,24 @@ class GridLASSOInference(LASSOInference):
 
         L_inactive = self.prec @ pre_proj
 
-        for i, (p_d, p_r) in enumerate(zip(self.data_peaks,
-                                           self.random_peaks)):
+        for i, (p_d, p_r) in enumerate(zip(self._data_peaks,
+                                           self._random_peaks)):
             p_d.set_value(L_inactive, p_d.get_value(L_inactive) - irrep[:,i])
             p_r.set_value(L_inactive, p_r.get_value(L_inactive) - irrep[:,i])
 
         L_inactive = L_inactive.T
         offset_inactive = self.subgrad[self.inactive] - L_inactive @ self.first_order
 
-        signs = np.array([p.point.sign for p in self.data_peaks])
-        L_active = np.zeros((self.cov.shape[0], len(self.data_peaks)))
+        signs = np.array([p.point.sign for p in self._data_peaks])
+        L_active = np.zeros((self.cov.shape[0], len(self._data_peaks)))
 
-        for i, (p_d, p_r) in enumerate(zip(self.data_peaks,
-                                           self.random_peaks)):
+        for i, (p_d, p_r) in enumerate(zip(self._data_peaks,
+                                           self._random_peaks)):
             p_d.set_value(L_active, C00i[i])
             p_r.set_value(L_active, C00i[i])
 
         L_active = L_active.T
-        offset_active = -C00i @ np.array([p.point.penalty * p.point.sign for p in self.data_peaks])
+        offset_active = -C00i @ np.array([p.point.penalty * p.point.sign for p in self._data_peaks])
         L_active = (np.diag(signs) @ L_active) / np.sqrt(np.diag(C00i))[:,None]
         offset_active = signs * offset_active / np.sqrt(np.diag(C00i))
 

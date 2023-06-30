@@ -26,15 +26,15 @@ DEBUG = False
 class DiscreteLASSOInference(LASSOInference):
 
     def _extract_peaks(self,
-                       model_locations=[]): 
+                       model_spec=[]): 
 
         Z, perturbation = self.Z, self.perturbation_
         E_nz = np.nonzero(self.E_)[0]
 
-        if model_locations is None:
-            model_locations = E_nz
+        if model_spec is None:
+            model_spec = E_nz
 
-        extra_points = set(model_locations).difference(E_nz)
+        extra_points = set(model_spec).difference(E_nz)
         signs = np.sign(self.subgrad[self.E_])
 
         idx = 0
@@ -45,6 +45,7 @@ class DiscreteLASSOInference(LASSOInference):
         for s, e in zip(signs, E_nz):
             data_peak = Peak(value=Z[e],
                              location=[e],
+                             index=e,
                              sign=s,
                              penalty=self.penalty[e])
             data_peaks.append(PointWithSlices(point=data_peak,
@@ -54,7 +55,8 @@ class DiscreteLASSOInference(LASSOInference):
             idx += 1
             
             random_peak = Point(value=perturbation[e],
-                                location=[e])
+                                location=[e],
+                                index=e)
             random_peaks.append(PointWithSlices(point=random_peak,
                                                 value_idx=idx,
                                                 gradient_slice=None,
@@ -64,7 +66,8 @@ class DiscreteLASSOInference(LASSOInference):
 
         for p in extra_points:
             extra_point = Point(value=Z[p],
-                                location=[p])
+                                location=[p],
+                                index=e)
             extra_points_.append(PointWithSlices(point=extra_point,
                                                  value_idx=idx,
                                                  gradient_slice=None,
@@ -75,18 +78,18 @@ class DiscreteLASSOInference(LASSOInference):
         self._random_peaks = random_peaks
         self._extra_points = extra_points_
         self._sufficient_points = data_peaks + extra_points_
-        self.model_locations = [(l,) for l in model_locations] # for sorting summary df later
-        self._model_points = [p for p in self._sufficient_points if tuple(p.point.location) in self.model_locations]
+        self.model_spec = [np.atleast_1d(l) for l in model_spec] # for sorting summary df later
+        self._model_points = [p for p in self._sufficient_points if tuple(p.point.location) in self.model_spec]
         
         return E_nz
     
     def setup_inference(self,
                         inactive,
-                        model_points=None):
+                        model_spec=None):
 
         self.inactive = inactive
 
-        self._extract_peaks(model_points)
+        self._extract_peaks(model_spec)
         cov = self.cov = self._compute_cov()
         self.prec = np.linalg.inv(self.cov)
         
@@ -180,7 +183,7 @@ class DiscreteLASSOInference(LASSOInference):
 
         if param is None:
             param = pd.DataFrame({'Param': np.zeros(len(self._data_peaks) + len(self._extra_points)),
-                                  'Location': self.model_locations})
+                                  'Location': self.model_spec})
             if one_sided:
                 param['Signs'] = np.array([p.point.sign for p in self._data_peaks])
 
@@ -211,7 +214,7 @@ class DiscreteLASSOInference(LASSOInference):
         df['Location'] = [tuple(p.point.location) for p in self._model_points]
 
         df = df.set_index('Location')
-        return df.loc[self.model_locations]
+        return df.loc[self.model_spec]
     
     # private methods
 
@@ -228,8 +231,8 @@ class DiscreteLASSOInference(LASSOInference):
                                     (self._random_peaks, self._random_peaks, RK)]:
             for p_l in peaks_l:
                 for p_r in peaks_r:
-                    cov[p_l.value_idx, p_r.value_idx] = K.C00([p_l.point.location],
-                                                              [p_r.point.location])
+                    cov[p_l.value_idx, p_r.value_idx] = K.C00([np.atleast_1d(p_l.point.location)],
+                                                              [np.atleast_1d(p_r.point.location)])
            
         return cov
 
@@ -301,7 +304,7 @@ class DiscreteLASSOInference(LASSOInference):
         RK = self.randomizer_kernel
         IK = self.inference_kernel
 
-        locations = [p.point.location for p in self._data_peaks]
+        locations = [np.atleast_1d(p.point.location) for p in self._data_peaks]
         C00 = (MK.C00(locations, locations) +
                RK.C00(locations, locations))
         C00i = np.linalg.inv(C00)
@@ -318,7 +321,7 @@ class DiscreteLASSOInference(LASSOInference):
         for peaks, K in [(self._sufficient_points, IK),
                          (self._random_peaks, RK)]:
             for p in peaks:
-                p.set_value(pre_proj, K.C00([p.point.location],
+                p.set_value(pre_proj, K.C00([np.atleast_1d(p.point.location)],
                                             None)[0, self.inactive])
 
         L_inactive = self.prec @ pre_proj

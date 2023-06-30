@@ -62,16 +62,18 @@ class covariance_structure(object):
 
         self.grid = grid
         self._grid = np.asarray(grid)
-        self._svd_info = svd_info
+        self.svd_info_ = svd_info
         
     @staticmethod
     def gaussian(precision=None,
                  var=1,
-                 grid=None):
+                 grid=None,
+                 svd_info=None):
         return covariance_structure(gaussian_kernel,
                                     kernel_args={'precision':precision,
                                                  'var':var},
-                                    grid=grid)
+                                    grid=grid,
+                                    svd_info=svd_info)
 
     # default simulation method -- better subclasses will overwrite
 
@@ -82,7 +84,7 @@ class covariance_structure(object):
         elif type(rng) == int:
             rng = np.random.default_rng(rng)
 
-        if self._svd_info is None:
+        if self.svd_info_ is None:
             S_ = self.C00(None, None)
             npt = int(np.sqrt(np.product(S_.shape)))
             shape = S_.shape[:len(S_.shape)//2]
@@ -90,7 +92,7 @@ class covariance_structure(object):
             A, D = np.linalg.svd(S_)[:2]
             self.svd_info_ = A, D, npt, shape
         else:
-            A, D, npt = self.svd_info_
+            A, D, npt, shape = self.svd_info_
 
         Z = A @ (np.sqrt(D) * rng.standard_normal(npt))
         Z = Z.reshape(shape)
@@ -428,7 +430,7 @@ class discrete_structure(covariance_structure):
         self.grid = (np.arange(S.shape[0]),)
         self._grid = np.asarray(self.grid)
         self.S_ = S
-        self._svd_info = svd_info
+        self.svd_info_ = svd_info
         
     def C00(self,
             loc_l,

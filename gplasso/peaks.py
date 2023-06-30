@@ -1,16 +1,16 @@
 from dataclasses import dataclass, asdict
 
 import numpy as np
+import pandas as pd
 from sklearn.cluster import AgglomerativeClustering
-
-from .taylor_expansion import taylor_expansion_window
 
 @dataclass
 class Point(object):
 
     location: np.ndarray
     value: np.ndarray
-
+    index: np.ndarray
+    
 @dataclass
 class Peak(Point):
 
@@ -23,7 +23,7 @@ class InteriorPoint(Point):
     gradient: np.ndarray
     hessian: np.ndarray
     tangent_basis: np.ndarray
-    n_obs: int # how many fields are observed here
+    n_obs: int # how many fields are observed here -- SHOULD ALWAYS BE 1 NOW
     n_ambient: int # how many spatial dimensions
     n_tangent: int # how many tangent dimensions
 
@@ -105,7 +105,7 @@ def extract_peaks(E,
                   second_order, # second order info (value, ambient gradient, ambient hessian) at each point in E
                   tangent_bases, # basis for tangent space at each point in E
                   normal_info, # normal basis and normal constraint at each point in E
-                  K,
+                  locations,
                   signs,
                   penalty_weights,
                   rng=None):
@@ -115,7 +115,7 @@ def extract_peaks(E,
                                      second_order, 
                                      tangent_bases, 
                                      normal_info, 
-                                     K,
+                                     locations,
                                      rng=rng)
 
     # annotate points with sign / penalty info
@@ -139,15 +139,13 @@ def extract_points(E,
                    second_order, # second order info (value, ambient gradient, ambient hessian) at each point in E
                    tangent_bases, # basis for tangent space at each point in E
                    normal_info, # normal basis and normal constraint at each point in E
-                   K,
+                   locations,
                    rng=None):
 
     if rng is None:
         rng = np.random.default_rng()
     elif type(rng) == int:
         rng = np.random.default_rng(rng)
-
-    locations = np.array([g[E] for g in K.grid]).T
 
     points = []
     indices = []
@@ -206,30 +204,30 @@ def extract_points(E,
 
         idx = rng.choice(cur_cluster, 1)[0]
         if normal_basis.shape[0] == 0:
-            point = InteriorPoint(location=locations[idx].reshape(-1),
-                                  value=value,
-                                  gradient=gradient,
-                                  hessian=hessian,
-                                  tangent_basis=tangent_basis,
-                                  n_obs=n_obs,
-                                  n_ambient=n_ambient,
-                                  n_tangent=tangent_basis.shape[0]
-                                  )
+            cur_points = [InteriorPoint(location=locations[idx].reshape(-1),
+                                        value=value[i],
+                                        gradient=gradient[i],
+                                        hessian=hessian[i],
+                                        tangent_basis=tangent_basis,
+                                        n_obs=n_obs,
+                                        n_ambient=n_ambient,
+                                        n_tangent=tangent_basis.shape[0]
+                                        ) for i in range(n_obs)]
         else:
-            point = BoundaryPoint(location=locations[idx].reshape(-1),
-                                  value=value,
-                                  gradient=gradient,
-                                  hessian=hessian,
-                                  tangent_basis=tangent_basis,
-                                  n_obs=n_obs,
-                                  n_ambient=n_ambient,
-                                  n_tangent=tangent_basis.shape[0],
-                                  n_normal=normal_basis.shape[0],
-                                  normal_basis=normal_basis,
-                                  normal_constraint=normal_constraint
-                                  )
+            cur_points = [BoundaryPoint(location=locations[idx].reshape(-1),
+                                        value=value[i],
+                                        gradient=gradient[i],
+                                        hessian=hessian[i],
+                                        tangent_basis=tangent_basis,
+                                        n_obs=n_obs,
+                                        n_ambient=n_ambient,
+                                        n_tangent=tangent_basis.shape[0],
+                                        n_normal=normal_basis.shape[0],
+                                        normal_basis=normal_basis,
+                                        normal_constraint=normal_constraint
+                                        ) for i in range(n_obs)]
             
-        points.append(point)
+        points.append(cur_points)
         indices.append(tuple([e[idx] for e in E]))
 
     return points, np.asarray(indices)
@@ -254,7 +252,14 @@ def default_clusters(E,
         clusters = hc.labels_
     else:
         clusters = np.array([0])
-    return clusters
+
+    E_nz = np.array(np.nonzero(E))
+    df = pd.DataFrame({'Cluster': clusters,
+                       })
+    df['Location'] = [tuple(l) for l in locations]
+    df['Index'] = [tuple(E_nz[:,i]) for i in range(E_nz.shape[1])]
+    return df
+
 
 def annotate_point(point,
                    sign,
