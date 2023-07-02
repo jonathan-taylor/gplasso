@@ -1,3 +1,5 @@
+from dataclasses import dataclass
+
 import numpy as np
 import jax.numpy as jnp
 from jax import jacfwd
@@ -49,7 +51,7 @@ class covariance_structure(object):
                  kernel,
                  kernel_args={},
                  grid=None,
-                 svd_info=None): # default grid of x values
+                 sampler=None): # default grid of x values
         """
         Compute covariance structure of field
         and its first two derivatives at points
@@ -57,47 +59,31 @@ class covariance_structure(object):
         """
 
         self.kernel_ = lambda loc_l, loc_r: kernel(loc_l,
-                                               loc_r,
-                                               **kernel_args)
+                                                   loc_r,
+                                                   **kernel_args)
 
         self.grid = grid
         self._grid = np.asarray(grid)
-        self.svd_info_ = svd_info
+        self.sampler = sampler
         
     @staticmethod
     def gaussian(precision=None,
                  var=1,
                  grid=None,
-                 svd_info=None):
+                 sampler=None):
         return covariance_structure(gaussian_kernel,
                                     kernel_args={'precision':precision,
                                                  'var':var},
                                     grid=grid,
-                                    svd_info=svd_info)
+                                    sampler=sampler)
 
     # default simulation method -- better subclasses will overwrite
 
-    def sample(self, rng=None):
+    def sample(self, rng):
 
-        if rng is None:
-            rng = np.random.default_rng()
-        elif type(rng) == int:
-            rng = np.random.default_rng(rng)
-
-        if self.svd_info_ is None:
-            S_ = self.C00(None, None)
-            npt = int(np.sqrt(np.product(S_.shape)))
-            shape = S_.shape[:len(S_.shape)//2]
-            S_ = S_.reshape(npt, npt)
-            A, D = np.linalg.svd(S_)[:2]
-            self.svd_info_ = A, D, npt, shape
-        else:
-            A, D, npt, shape = self.svd_info_
-
-        Z = A @ (np.sqrt(D) * rng.standard_normal(npt))
-        Z = Z.reshape(shape)
-        return Z
-
+        if self.sampler is None:
+            raise ValueError('must provide "sampler" at init to draw a sample')
+        return self.sampler(rng)
 
     # location based computations
 
@@ -426,11 +412,17 @@ class discrete_structure(covariance_structure):
 
     def __init__(self,
                  S,
-                 svd_info=None):
+                 sampler=None):
         self.grid = (np.arange(S.shape[0]),)
         self._grid = np.asarray(self.grid)
         self.S_ = S
-        self.svd_info_ = svd_info
+        if sampler is None:
+            npt = S.shape[0]
+            shape = S.shape[:1]
+            U, D = np.linalg.svd(S)[:2]
+            sampler = SVDSampler(U, D, npt, shape)
+
+        self.sampler = sampler
         
     def C00(self,
             loc_l,
@@ -567,6 +559,25 @@ class discrete_structure(covariance_structure):
                              reshape,
                              grid_l,
                              grid_r)
+
+@dataclass
+class SVDSampler(object):
+
+    U : np.ndarray # left singular vectors of S
+    D : np.ndarray # square root of singular vectors of S
+    npt : int      # when flattened, how many pts?
+    shape : tuple  # how to reshape final vector
+
+    def __call__(self, rng=None):
+        if rng is None:
+            rng = np.random.default_rng()
+        elif type(rng) == int:
+            rng = np.random.default_rng(rng)
+
+        Z = self.U @ (np.sqrt(self.D) * rng.standard_normal(self.npt))
+        Z = Z.reshape(self.shape)
+
+        return Z
 
 def _get_LR(grid, loc_l, loc_r):
     G = grid.transpose(list(range(1, grid[0].ndim+1)) + [0])

@@ -37,6 +37,7 @@ def instance(seed=10,
 
     proportion = 0.8
     var_random = (1 - proportion) / proportion
+
     K_omega = discrete_structure(var_random * np.diag(np.linspace(1, 1.5, p)))
     
     penalty_weights = 2 * np.sqrt(1 + var_random) * np.ones_like(Z)

@@ -6,7 +6,8 @@ import pandas as pd
 
 from gplasso.api import (covariance_structure,
                          default_clusters,
-                         GridLASSOInference)
+                         GridLASSOInference,
+                         SVDSampler)
 
 from joblib import Memory
 location = './cachedir'
@@ -25,9 +26,10 @@ def compute_svd_info(xval,
     npt = int(np.sqrt(np.product(S_.shape)))
     shape = S_.shape[:len(S_.shape)//2]
     S_ = S_.reshape(npt, npt)
-    A, D = np.linalg.svd(S_)[:2]
+    U, D = np.linalg.svd(S_)[:2]
 
-    return A, D, npt, shape
+    return U, D, npt, shape
+
 compute_svd_info = memory.cache(compute_svd_info)
 
 
@@ -52,9 +54,11 @@ def instance(seed=10,
     svd_info = compute_svd_info(xval,
                                 yval,
                                 precision)
+    
+    K_sampler = SVDSampler(*svd_info)
     K = covariance_structure.gaussian(precision=precision,
                                       grid=grid,
-                                      svd_info=svd_info)
+                                      sampler=K_sampler)
 
     Z = K.sample(rng=rng)
 
@@ -64,11 +68,12 @@ def instance(seed=10,
                                      yval,
                                      precision,
                                      var=var_random)
-
+    omega_sampler = SVDSampler(*svd_info_rand)
+    
     K_omega = covariance_structure.gaussian(precision=precision,
                                             grid=grid,
                                             var=var_random,
-                                            svd_info=svd_info_rand)
+                                            sampler=omega_sampler)
 
     penalty_weights = 2 * np.sqrt(1 + var_random) * np.ones_like(Z)
 
