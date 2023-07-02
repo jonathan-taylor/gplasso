@@ -199,8 +199,7 @@ class GridLASSOInference(LASSOInference):
         return model_spec
 
     def setup_inference(self,
-                        inactive,
-                        model_spec=[]):
+                        inactive):
 
         self.inactive = inactive
 

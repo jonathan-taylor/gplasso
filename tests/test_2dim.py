@@ -98,7 +98,20 @@ def instance(seed=10,
         selection.append(cur_df.iloc[rng.choice(cur_df.shape[0], 1)])
     selection = pd.concat(selection)
 
-    model_spec = lasso.extract_peaks(selection['Index'])
+    model_spec = pd.DataFrame({'Value':[True] * len(selection['Index']),
+                               'Displacement':[False] * len(selection['Index'])},
+                              index=selection['Index'])
+    model_spec.loc[[selection['Index'][0]],'Value'] = False
+
+    mid = (xval.shape[0]//2, yval.shape[0]//2)
+    extra_pt = pd.DataFrame({'Value':[True],
+                             'Displacement':[False],
+                             'Index':[mid]}).set_index('Index')
+
+    model_spec = pd.concat([model_spec, extra_pt])
+    
+    model_spec = lasso.extract_peaks(selection['Index'],
+                                     model_spec=model_spec)
     
     E_nz = np.nonzero(E)
     if plot:
@@ -115,14 +128,13 @@ def instance(seed=10,
         inactive[max(i-2, 0):(i+2),
                  max(j-2, 0):(j+2)] = 0
 
-    lasso.setup_inference(inactive,
-                          model_spec=model_spec)
+    param_default = lasso.setup_inference(inactive)
 
     pivot_carve, disp_carve = lasso.summary(one_sided=False,
-                                            param=None,
+                                            param=param_default,
                                             level=0.9)
 
-    return pivot_carve, svd_info
+    return pivot_carve
 
 def test_2d():
 
@@ -131,11 +143,10 @@ def test_2d():
 
 if __name__ == '__main__':
     dfs = []
-    svd_info = None
     
     for _ in range(200):
         try:
-            df, svd_info = instance(seed=None, svd_info=svd_info)
+            df = instance(seed=None)
             dfs.append(df)
         except KeyboardInterrupt:
             break
