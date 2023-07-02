@@ -25,6 +25,85 @@ DEBUG = False
 
 class DiscreteLASSOInference(LASSOInference):
 
+        
+    def setup_inference(self,
+                        inactive,
+                        model_spec=None):
+
+        self.inactive = inactive
+
+        self._extract_peaks(model_spec)
+        cov = self.cov = self._compute_cov()
+        self.prec = np.linalg.inv(self.cov)
+        
+        # form the T / N matrices for the decomposition
+        # T is a selector matrix for all sufficient stats in the model
+        # N is empty for discrete LASSO
+
+        T = []
+        for p in self._model_points:
+            value_col = np.zeros((cov.shape[0], 1))
+            p.set_value(value_col, 1)
+            T.append(value_col)
+
+        T = np.concatenate(T, axis=1).T
+
+        # now specify the value the gradient is pinned at
+        
+        N = np.zeros((0, T.shape[1]))
+
+        self.regress_decomp = regression_decomposition(cov, T, N) 
+
+        # compute the first order data
+
+        self.first_order = np.zeros(cov.shape[0])
+        for p in self._sufficient_points + self._random_peaks:
+            p.set_value(self.first_order, p.point.value)
+
+        locations = [p.point.location for p in self._random_peaks]
+        self.barrier_info = self._form_barrier()
+
+    def summary(self,
+                level=0.90,
+                one_sided=True,
+                location=False,
+                param=None):
+
+        if param is None:
+            param = pd.DataFrame({'Param': np.zeros(len(self._data_peaks) + len(self._extra_points)),
+                                  'Location': self.model_spec})
+            if one_sided:
+                param['Signs'] = np.array([p.point.sign for p in self._data_peaks])
+
+            param = param.set_index('Location')
+            
+        mle, mle_cov = self._solve_MLE()
+        
+        mle_df = pd.DataFrame({'Estimate':mle,
+                               'SD':np.sqrt(np.diag(mle_cov)),
+                               'Location':[tuple(p.point.location) for p in self._model_points]})
+        mle_df = mle_df.set_index('Location')
+        joined_df = pd.merge(param,
+                             mle_df,
+                             left_index=True,
+                             right_index=True)
+                                 
+        if one_sided:
+            df = mle_summary(joined_df['Estimate'],
+                             joined_df['SD'],
+                             param=joined_df['Param'],
+                             signs=joined_df['Signs'],
+                             level=level)
+        else:
+            df = mle_summary(joined_df['Estimate'],
+                             joined_df['SD'],
+                             param=joined_df['Param'],
+                             level=level)
+        df['Location'] = [tuple(p.point.location) for p in self._model_points]
+
+        df = df.set_index('Location')
+        return df.loc[self.model_spec]
+
     def _extract_peaks(self,
                        model_spec=[]): 
 
@@ -80,45 +159,8 @@ class DiscreteLASSOInference(LASSOInference):
         self._sufficient_points = data_peaks + extra_points_
         self.model_spec = [tuple(np.atleast_1d(l)) for l in model_spec] # for sorting summary df later
         self._model_points = [p for p in self._sufficient_points if tuple(p.point.location) in self.model_spec]
-        
-        return E_nz
-    
-    def setup_inference(self,
-                        inactive,
-                        model_spec=None):
 
-        self.inactive = inactive
-
-        self._extract_peaks(model_spec)
-        cov = self.cov = self._compute_cov()
-        self.prec = np.linalg.inv(self.cov)
-        
-        # form the T / N matrices for the decomposition
-        # T is a selector matrix for all sufficient stats in the model
-        # N is empty for discrete LASSO
-
-        T = []
-        for p in self._model_points:
-            value_col = np.zeros((cov.shape[0], 1))
-            p.set_value(value_col, 1)
-            T.append(value_col)
-
-        T = np.concatenate(T, axis=1).T
-
-        # now specify the value the gradient is pinned at
-        
-        N = np.zeros((0, T.shape[1]))
-
-        self.regress_decomp = regression_decomposition(cov, T, N) 
-
-        # compute the first order data
-
-        self.first_order = np.zeros(cov.shape[0])
-        for p in self._sufficient_points + self._random_peaks:
-            p.set_value(self.first_order, p.point.value)
-
-        locations = [p.point.location for p in self._random_peaks]
-        self.barrier_info = self._form_barrier()
+    # private methods
 
     def _solve_MLE(self):
         
@@ -179,50 +221,7 @@ class DiscreteLASSOInference(LASSOInference):
             mle_cov = cov_beta_TN
 
         return mle, mle_cov
-
-    def summary(self,
-                level=0.90,
-                one_sided=True,
-                location=False,
-                param=None):
-
-        if param is None:
-            param = pd.DataFrame({'Param': np.zeros(len(self._data_peaks) + len(self._extra_points)),
-                                  'Location': self.model_spec})
-            if one_sided:
-                param['Signs'] = np.array([p.point.sign for p in self._data_peaks])
-
-            param = param.set_index('Location')
-            
-        mle, mle_cov = self._solve_MLE()
-        
-        mle_df = pd.DataFrame({'Estimate':mle,
-                               'SD':np.sqrt(np.diag(mle_cov)),
-                               'Location':[tuple(p.point.location) for p in self._model_points]})
-        mle_df = mle_df.set_index('Location')
-        joined_df = pd.merge(param,
-                             mle_df,
-                             left_index=True,
-                             right_index=True)
-                                 
-        if one_sided:
-            df = mle_summary(joined_df['Estimate'],
-                             joined_df['SD'],
-                             param=joined_df['Param'],
-                             signs=joined_df['Signs'],
-                             level=level)
-        else:
-            df = mle_summary(joined_df['Estimate'],
-                             joined_df['SD'],
-                             param=joined_df['Param'],
-                             level=level)
-        df['Location'] = [tuple(p.point.location) for p in self._model_points]
-
-        df = df.set_index('Location')
-        return df.loc[self.model_spec]
     
-    # private methods
-
     def _compute_cov(self):
         cov_size = len(self._data_peaks) + len(self._random_peaks) + len(self._extra_points)
         cov = np.zeros((cov_size, cov_size))
