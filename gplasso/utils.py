@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from functools import partial
 
 import numpy as np
-
+import jax
 import pandas as pd
 
 from scipy.stats import norm as normal_dbn
@@ -95,19 +95,20 @@ def mle_summary(mle,
     Z = (mle - param) / SD
 
     if signs is not None:
-        one_sided = False
+        one_sided = True
         P = normal_dbn.sf(Z * signs)
     else:
         one_sided = False
         P = normal_dbn.cdf(Z)
         P = 2 * np.minimum(P, 1-P)
+
     df = pd.DataFrame({'Estimate':mle,
                        'SD':SD,
                        'Param':param})
     if one_sided:
         df['P-value (1-sided)'] = P
     else:
-        df['P-value (2-sided)'] = 2 * np.minimum(P, 1 - P)
+        df['P-value (2-sided)'] = P
 
     if level is not None:
         q = normal_dbn.ppf(1 - (1 - level) / 2)

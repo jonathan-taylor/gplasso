@@ -90,13 +90,16 @@ class GridLASSOInference(LASSOInference):
         
         if model_spec is None:
             model_spec = pd.DataFrame({'Value':[True] * len(selected_idx),
-                                       'Displacement':[False] * len(selected_idx)}, index=selected_idx)
+                                       'Displacement':[False] * len(selected_idx)},
+                                      index=selected_idx)
         model_spec['Location'] = [self.get_location(idx) for idx in model_spec.index]
         model_spec = model_spec.reset_index()
         model_spec = model_spec.set_index(['Location', 'Index'])
         
-        selected_df = selected_df + model_spec[lambda df: df.index.isin(selected_df.index)] # could make some NaN's
-        # fix the NaN's
+        # could make some NaN's
+        selected_df = (selected_df +
+                       model_spec[lambda df: df.index.isin(selected_df.index)])
+        # set the NaN's to False
         selected_df.loc[selected_df['Displacement'].isnull(), ['Displacement', 'Value']] = False
         
         # effects in model_spec not captured in selected_df -- by default will be empty
@@ -126,7 +129,6 @@ class GridLASSOInference(LASSOInference):
                                                      second_order_expansion(self.gridvals,
                                                                             perturbation,
                                                                             selected_df['Index']))):
-            print(data_pt)
             data_pt = InteriorPeak(location=data_pt.location,
                                    index=data_pt.index,
                                    sign=selected_df['Sign'][i],
@@ -218,24 +220,27 @@ class GridLASSOInference(LASSOInference):
         # T is a selector matrix for all sufficient stats in the model
         # N is represents the random vector in the "0" of the Kac-Rice formula
 
-        T = []
+        cols = []
+
+        mle_index = []
         for p in self._data_peaks + self._extra_points:
-            cols = []
             if self._spec_df['Value'][p.point.location]:
                 value_col = np.zeros((cov.shape[0], 1))
                 p.set_value(value_col, 1)
                 cols.append(value_col)
+                mle_index.append((p.point.location, 'Value'))
                 
             if self._spec_df['Displacement'][p.point.location]:
                 gradient_cols = np.zeros((cov.shape[0], p.point.n_ambient))
                 p.set_gradient(gradient_cols, np.identity(p.point.n_ambient))
                 cols.append(gradient_cols)
+                mle_index.append([(p.point.location, 'Displacement[%d]' % i)
+                                  for i in range(gradient_cols.shape[1])])
+                
+        T = np.concatenate(cols, axis=1).T
 
-            if cols:
-                T.append(np.concatenate(cols, axis=1).T)
-
-        T = np.concatenate(T, axis=0)
-
+        self._mle_index = pd.MultiIndex.from_tuples(mle_index, names=['Location', 'Type'])
+        
         # now specify the value the gradient is pinned at
         
         N = []
@@ -266,18 +271,15 @@ class GridLASSOInference(LASSOInference):
                                              C00i)
         self.barrier_info = self._form_barrier(C00i)
 
-    def summary(self,
-                level=0.90,
-                displacement_level=0.90,
-                one_sided=True,
-                location=False,
-                param=None):
+        param_df = pd.DataFrame({}, index=self._mle_index)
+        param_df['Param'] = 0
+
+        return param_df
+
+    def _solve_MLE(self):
 
         barrier, G_barrier, N_barrier = self.barrier_info
         logdet, G_logdet, N_logdet = self.logdet_info
-
-        if param is None:
-            param = np.zeros(len(self._data_peaks))
 
         (T,
          N,
@@ -294,152 +296,93 @@ class GridLASSOInference(LASSOInference):
         R = first_order - offset - L_beta @ beta_nosel
         initial_W = np.linalg.inv(sqrt_cov_R.T @ sqrt_cov_R) @ sqrt_cov_R.T @ R
 
-        N_barrier_ = N_barrier + G_barrier @ (offset + L_beta @ beta_nosel)
-        G_barrier_ = G_barrier @ sqrt_cov_R
+        if initial_W.shape[0] != (0,): # there is some noise to integrate over
+            N_barrier_ = N_barrier + G_barrier @ (offset + L_beta @ beta_nosel)
+            G_barrier_ = G_barrier @ sqrt_cov_R
 
-        N_logdet_ = N_logdet + G_logdet @ (offset + L_beta @ beta_nosel)
-        G_logdet_ = G_logdet @ sqrt_cov_R
+            N_logdet_ = N_logdet + G_logdet @ (offset + L_beta @ beta_nosel)
+            G_logdet_ = G_logdet @ sqrt_cov_R
 
-        def obj_maker_(obj,
-                       offset,
-                       L_beta,
-                       L_W):
+            B_ = _obj_maker(barrier,
+                            offset,
+                            L_beta,
+                            sqrt_cov_R)
 
-            def _new(offset,
-                     L_beta,
-                     L_W,
-                     beta,
-                     W):
-                arg = offset + L_W @ W + L_beta @ beta
-                return obj(arg)
-
-            return partial(_new,
-                           offset,
-                           L_beta,
-                           L_W)
-
-        B_ = obj_maker_(barrier,
-                         offset,
-                         L_beta,
-                         sqrt_cov_R)
-
-        LD_ = obj_maker_(logdet,
-                         offset,
-                         L_beta,
-                         sqrt_cov_R)
+            LD_ = _obj_maker(logdet,
+                             offset,
+                             L_beta,
+                             sqrt_cov_R)
 
 
-        L = logdet_nojax()
-        B = barrier_nojax(scale=1, shift=1)
+            obj_jax = lambda beta, W: B_(beta, W) + LD_(beta, W)
+            grad_jax = jacfwd(obj_jax, argnums=(0,1))
+            hess_jax = jacfwd(grad_jax, argnums=(0,1))
 
-        obj_jax = lambda beta, W: B_(beta, W) + LD_(beta, W)
-        grad_jax = jacfwd(obj_jax, argnums=(0,1))
-        hess_jax = jacfwd(grad_jax, argnums=(0,1))
+            val_ = lambda W: obj_jax(beta_nosel, W)
+            grad_ = lambda W: grad_jax(beta_nosel, W)[1]
+            hess_ = lambda W: hess_jax(beta_nosel, W)[1][1]
 
-        val_ = lambda W: (B.value(G_barrier_ @ W + N_barrier_) +
-                          L.value(G_logdet_ @ W + N_logdet_))
-        grad_ = lambda W: (B.gradient(G_barrier_ @ W + N_barrier_, G_barrier_) +
-                           L.gradient(G_logdet_ @ W + N_logdet_, G_logdet_))
-        hess_ = lambda W: (B.hessian(G_barrier_ @ W + N_barrier_, G_barrier_, G_barrier_) +
-                           L.hessian(G_logdet_ @ W + N_logdet_, G_logdet_, G_logdet_))
-        # other derivatives if we don't use jax
+            W_star = _compute_mle(initial_W,
+                                  val_,
+                                  grad_,
+                                  hess_)
 
-        grad0_ = lambda W: (B.gradient(G_barrier_ @ W + N_barrier_, G_barrier_) +
-                            L.gradient(G_logdet_ @ W + N_logdet_, G_logdet @ L_beta))
-        hess11_ = hess_
-        hess10_ = lambda W: (B.hessian(G_barrier_ @ W + N_barrier_, G_barrier_, G_barrier @ L_beta) +
-                             L.hessian(G_logdet_ @ W + N_logdet_, G_logdet_, G_logdet @ L_beta))
-        hess01_ = lambda W: hess10_(W).T
-        hess00_ = lambda W: (B.hessian(G_barrier_ @ W + N_barrier_, G_logdet @ L_beta, G_barrier @ L_beta) +
-                             L.hessian(G_logdet_ @ W + N_logdet_, G_logdet @ L_beta, G_logdet @ L_beta))
-        W = initial_W.copy()
-        I = np.identity(W.shape[0])
+            mle = beta_nosel + cov_beta_TN @ grad_jax(beta_nosel, W_star)[0]
 
-        use_jax = True
-        num_newton = 20
+            I = np.identity(W_star.shape[0])
+            H_full = hess_jax(beta_nosel, W_star)
 
-        if W.shape != (0,): # for data splitting W has shape (0,)
-            for i in range(num_newton):
-                if DEBUG:
-                    print('newton iterate {}'.format(i))
-                if use_jax:
-                    H = I + hess_jax(beta_nosel, W)[1][1]
-                    G = W + grad_jax(beta_nosel, W)[1]
-                else:
-                    H = I + hess_(W)
-                    G = W + grad_(W)
-
-                # do a line search
-
-                factor = 1
-                niter = 0
-                cur_val = np.inf
-                step = np.linalg.inv(H) @ G
-
-                if DEBUG:
-                    jax.debug.print('grad {}', G)
-                while True:
-                    W_new = W - factor * step
-                    if use_jax:
-                        new_val = obj_jax(beta_nosel, W_new) + (W_new**2).sum() * 0.5
-                    else:
-                        new_val = val_(W_new) + (W_new**2).sum() * 0.5                
-                    if new_val < cur_val:
-                        break
-
-                    factor *= 0.5
-                    niter += 1
-                    if niter >= 30:
-                        raise ValueError('no descent')
-
-                if np.linalg.norm(W - W_new) < 1e-9 * np.linalg.norm(W):
-                    break
-
-                W = W_new
-                cur_val = new_val
-
-            if DEBUG:
-                print('W', W)
-
-            mle = beta_nosel + cov_beta_TN @ grad_jax(beta_nosel, W)[0]
-
-            H_full = hess_jax(beta_nosel, W)
             observed_info = (np.linalg.inv(cov_beta_TN) +
-                             H_full[0][0] - H_full[0][1] @ np.linalg.inv(I + H_full[1][1]) @ H_full[1][0])
-            mle_cov = cov_beta_TN @ observed_info @ cov_beta_TN
+                             (H_full[0][0] - H_full[0][1] @
+                              np.linalg.inv(I + H_full[1][1]) @
+                              H_full[1][0]))
 
+            mle_cov = cov_beta_TN @ observed_info @ cov_beta_TN
         else:
             mle = beta_nosel
             mle_cov = cov_beta_TN
 
-        height_mle, loc_mle = mle[:len(self._data_peaks)], mle[len(self._data_peaks):]
-        peaks = self._data_peaks
-        height_param = param[:len(self._data_peaks)]
-        height_SD = np.sqrt(np.diag(mle_cov)[:len(self._data_peaks)])
-        height_Z = (height_mle - height_param) / height_SD
+        return mle, mle_cov
 
-        if DEBUG:
-            print(mle, 'mle')
-            print(param, 'param')
-            print(beta_nosel, 'no selection')
+    def summary(self,
+                level=0.90,
+                displacement_level=0.90,
+                one_sided=True,
+                location=False,
+                param=None):
 
-        signs = np.array([p.point.sign for p in self._data_peaks])
-        P = normal_dbn.sf(height_Z * signs)
-        df = pd.DataFrame({'Location':[tuple(p.point.location) for p in self._data_peaks],
-                           'Estimate':height_mle,
-                           'SD':height_SD,
-                           'Param':height_param})
+        if param is None:
+            
+            param = pd.DataFrame({}, 
+                                 index=self._mle_index)
+            param['Param'] = 0
+            
+            if one_sided:
+                raise ValueError('must provide a "param" argument with a "Signs" column for one-sided tests')
+            
+        mle, mle_cov = self._solve_MLE()
+
+        mle_df = pd.DataFrame({'Estimate':mle,
+                               'SD':np.sqrt(np.diag(mle_cov))},
+                              index=self._mle_index)
+
+        joined_df = pd.merge(param,
+                             mle_df,
+                             left_index=True,
+                             right_index=True)
+                                 
         if one_sided:
-            df = mle_summary(height_mle,
-                             height_SD,
-                             param=height_param,
-                             signs=signs,
+            df = mle_summary(joined_df['Estimate'],
+                             joined_df['SD'],
+                             param=joined_df['Param'],
+                             signs=joined_df['Signs'],
                              level=level)
         else:
-            df = mle_summary(height_mle,
-                             height_SD,
-                             param=height_param,
+            df = mle_summary(joined_df['Estimate'],
+                             joined_df['SD'],
+                             param=joined_df['Param'],
                              level=level)
+
         df['Location'] = [tuple(p.point.location) for p in self._data_peaks]
 
         # # now confidence regions for the peaks

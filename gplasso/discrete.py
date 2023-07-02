@@ -78,7 +78,7 @@ class DiscreteLASSOInference(LASSOInference):
         self._random_peaks = random_peaks
         self._extra_points = extra_points_
         self._sufficient_points = data_peaks + extra_points_
-        self.model_spec = [np.atleast_1d(l) for l in model_spec] # for sorting summary df later
+        self.model_spec = [tuple(np.atleast_1d(l)) for l in model_spec] # for sorting summary df later
         self._model_points = [p for p in self._sufficient_points if tuple(p.point.location) in self.model_spec]
         
         return E_nz
@@ -139,7 +139,7 @@ class DiscreteLASSOInference(LASSOInference):
         R = first_order - offset - L_beta @ beta_nosel
         initial_W = np.linalg.inv(sqrt_cov_R.T @ sqrt_cov_R) @ sqrt_cov_R.T @ R
 
-        if initial_W.shape[0] != (0,):
+        if initial_W.shape[0] != (0,): # there is some noise to integrate over
 
             N_barrier_ = N_barrier + G_barrier @ (offset + L_beta @ beta_nosel)
             G_barrier_ = G_barrier @ sqrt_cov_R
@@ -166,9 +166,14 @@ class DiscreteLASSOInference(LASSOInference):
 
             I = np.identity(W_star.shape[0])
             H_full = hess_jax(beta_nosel, W_star)
+
             observed_info = (np.linalg.inv(cov_beta_TN) +
-                             H_full[0][0] - H_full[0][1] @ np.linalg.inv(I + H_full[1][1]) @ H_full[1][0])
+                             (H_full[0][0] - H_full[0][1] @
+                              np.linalg.inv(I + H_full[1][1]) @
+                              H_full[1][0]))
+
             mle_cov = cov_beta_TN @ observed_info @ cov_beta_TN
+
         else:
             mle = beta_nosel
             mle_cov = cov_beta_TN
