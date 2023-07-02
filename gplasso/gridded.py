@@ -241,6 +241,14 @@ class GridLASSOInference(LASSOInference):
 
         self._mle_index = pd.MultiIndex.from_tuples(mle_index, names=['Location', 'Type'])
         
+        param_df = pd.DataFrame({}, index=self._mle_index)
+        param_df['Param'] = 0
+
+        param_df = param_df.reset_index()
+        param_df = param_df[lambda df: df['Type'] == 'Value']
+        
+        param_df = param_df.set_index('Location')
+        
         # now specify the value the gradient is pinned at
         
         N = []
@@ -271,9 +279,9 @@ class GridLASSOInference(LASSOInference):
                                              C00i)
         self.barrier_info = self._form_barrier(C00i)
 
-        param_df = pd.DataFrame({}, index=self._mle_index)
-        param_df['Param'] = 0
-
+        # setup a default parameter df
+        
+        self._default_param = param_df.copy()
         return param_df
 
     def _solve_MLE(self):
@@ -352,11 +360,7 @@ class GridLASSOInference(LASSOInference):
                 param=None):
 
         if param is None:
-            
-            param = pd.DataFrame({}, 
-                                 index=self._mle_index)
-            param['Param'] = 0
-            
+            param = self._default_param
             if one_sided:
                 raise ValueError('must provide a "param" argument with a "Signs" column for one-sided tests')
             
@@ -366,24 +370,28 @@ class GridLASSOInference(LASSOInference):
                                'SD':np.sqrt(np.diag(mle_cov))},
                               index=self._mle_index)
 
+        value_df = mle_df.copy()
+        value_df = value_df.reset_index()
+        value_df = value_df[lambda df: df['Type'] == 'Value']
+        value_df = value_df.set_index('Location')
+        
+        # inference for peak heights / values
         joined_df = pd.merge(param,
-                             mle_df,
+                             value_df,
                              left_index=True,
                              right_index=True)
                                  
         if one_sided:
-            df = mle_summary(joined_df['Estimate'],
-                             joined_df['SD'],
-                             param=joined_df['Param'],
-                             signs=joined_df['Signs'],
-                             level=level)
+            value_df = mle_summary(joined_df['Estimate'],
+                                   joined_df['SD'],
+                                   param=joined_df['Param'],
+                                   signs=joined_df['Signs'],
+                                   level=level)
         else:
-            df = mle_summary(joined_df['Estimate'],
-                             joined_df['SD'],
-                             param=joined_df['Param'],
-                             level=level)
-
-        df['Location'] = [tuple(p.point.location) for p in self._data_peaks]
+            value_df = mle_summary(joined_df['Estimate'],
+                                   joined_df['SD'],
+                                   param=joined_df['Param'],
+                                   level=level)
 
         # # now confidence regions for the peaks
 
@@ -415,7 +423,7 @@ class GridLASSOInference(LASSOInference):
         #         loc_results.append(DisplacementEstimate(p.location, None, None, None, None))
 
         loc_results = None
-        return df.set_index('Location'), loc_results
+        return value_df, loc_results
 
     def _compute_cov(self, cov_size):
         cov = np.zeros((cov_size, cov_size))
