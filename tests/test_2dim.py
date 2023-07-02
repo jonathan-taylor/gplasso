@@ -126,7 +126,7 @@ def instance(seed=10,
 
 def test_2d():
 
-    instance(seed=10)
+    instance(seed=7)
     
 
 if __name__ == '__main__':
