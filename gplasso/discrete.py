@@ -25,7 +25,6 @@ DEBUG = False
 
 class DiscreteLASSOInference(LASSOInference):
 
-        
     def setup_inference(self,
                         inactive,
                         model_spec=None):

@@ -13,8 +13,8 @@ from scipy.stats import chi2
 import jax
 from jax import jacfwd
 
-from .base import (LASSOInference,
-                   PointWithSlices as PointWithSlicesBase)
+from .gridded import (GridLASSOInference,
+                      PointWithSlices)
 from .kernels import covariance_structure
 
 from .peaks import (get_gradient,

@@ -103,22 +103,9 @@ class LASSOInference(object):
     randomizer_kernel: covariance_structure
     inference_kernel: Optional[covariance_structure] = None
     
-    # def __init__(self,
-    #              penalty,
-    #              model_kernel,
-    #              randomizer_kernel,
-    #              inference_kernel=None):
-       
-    #     if inference_kernel is None:
-    #         inference_kernel = model_kernel
-
-    #     (self.penalty,
-    #      self.model_kernel,
-    #      self.randomizer_kernel,
-    #      self.inference_kernel) = (penalty,
-    #                                model_kernel,
-    #                                randomizer_kernel,
-    #                                inference_kernel)
+    def __post_init__(self):
+        if self.inference_kernel is None:
+            self.inference_kernel = self.model_kernel
 
     def fit(self,
             Z: np.ndarray,
@@ -133,7 +120,7 @@ class LASSOInference(object):
         rng : Optional[], optional, default: None [Argument]
 
         """
-        
+
         # fit the GP lasso
         if perturbation is None:
             perturbation = self.randomizer_kernel.sample(rng=rng)
@@ -149,7 +136,8 @@ class LASSOInference(object):
 
     def setup_inference(self,
                         inactive: np.ndarray,
-                        model_spec: Optional[Any]=[]):
+                        model_spec: Optional[Any]=[],
+                        inference_kernel: Optional[covariance_structure]=None):
         """
         Parameters
         ----------

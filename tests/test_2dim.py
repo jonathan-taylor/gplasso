@@ -22,6 +22,7 @@ def compute_svd_info(xval,
     K = covariance_structure.gaussian(precision=precision,
                                       grid=grid,
                                       var=var)
+
     S_ = K.C00(None, None)
     npt = int(np.sqrt(np.product(S_.shape)))
     shape = S_.shape[:len(S_.shape)//2]
@@ -77,11 +78,9 @@ def instance(seed=10,
 
     penalty_weights = 2 * np.sqrt(1 + var_random) * np.ones_like(Z)
 
-    lasso = GridLASSOInference((xval, yval),
-                               penalty_weights,
+    lasso = GridLASSOInference(penalty_weights,
                                K,
-                               K_omega,
-                               inference_kernel=None)
+                               K_omega)
 
     E, soln, subgrad = lasso.fit(Z,
                                  rng=rng)
