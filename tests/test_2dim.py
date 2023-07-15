@@ -114,6 +114,7 @@ def instance(seed=10,
     
     E_nz = np.nonzero(E)
     if plot:
+        signs = np.sign(subgrad[E_nz])
         fig, ax = plt.subplots(figsize=(8, 10))
         ax = plt.gca()
         im = ax.imshow(Z.T, cmap='coolwarm')
