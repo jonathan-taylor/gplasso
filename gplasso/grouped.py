@@ -13,8 +13,8 @@ from scipy.stats import chi2
 import jax
 from jax import jacfwd
 
-from .base import (LASSOInference,
-                   PointWithSlices as PointWithSlicesBase)
+from .gridded import (GridLASSOInference,
+                      PointWithSlices)
 from .kernels import covariance_structure
 
 from .peaks import (get_gradient,
@@ -159,6 +159,7 @@ class GridLASSOInference(LASSOInference):
                                                       hessian_slice=self._data_peaks[-1].hessian_slice))
             idx += 1 + random_pt.n_ambient
 
+
         self._extra_points = []
         for extra_pt in second_order_expansion(self.gridvals,
                                                Z,
@@ -187,13 +188,6 @@ class GridLASSOInference(LASSOInference):
         self.prec = np.linalg.inv(self.cov)
 
         self._spec_df = sufficient_df
-
-        # for debugging purposes, should have hessian (up to sign) roughly the sum of the affine transforms (G_hess, N_hess)
-        # and (G_regressMR, N_regressMR)
-        self._subgradient_pts = [p for p in second_order_expansion(self.gridvals,
-                                                                   self.subgrad,
-                                                                   selected_df['Index'])]
-
         return model_spec
 
     def setup_inference(self,
@@ -208,9 +202,9 @@ class GridLASSOInference(LASSOInference):
         # the affine term in the Kac Rice formula and the corresponding residual of
         # (f_E, \omega_E, \nabla f_E, \nabla \omega_E) 
 
-        C00i, M, C20_prod_C00i = _compute_random_model_cov(self._data_peaks,
-                                                           self.model_kernel, 
-                                                           self.randomizer_kernel)
+        C00i, M, G_blocks = _compute_random_model_cov(self._data_peaks,
+                                                      self.model_kernel, 
+                                                      self.randomizer_kernel)
 
         # form the T / N matrices for the decomposition
 
@@ -272,11 +266,7 @@ class GridLASSOInference(LASSOInference):
             p.set_value(self.first_order, p.point.value)
             p.set_gradient(self.first_order, get_gradient(p.point))
 
-        self.sign_and_penalty = np.zeros(cov.shape[0])
-        for p in self._data_peaks:
-            p.set_value(self.sign_and_penalty, p.point.sign * p.point.penalty)
-
-        self.logdet_info = self._form_logdet(C20_prod_C00i,
+        self.logdet_info = self._form_logdet(G_blocks,
                                              C00i)
         self.barrier_info = self._form_barrier(C00i)
 
@@ -455,7 +445,7 @@ class GridLASSOInference(LASSOInference):
         return cov
 
     def _form_logdet(self,
-                     C20_prod_C00i,
+                     G_blocks,
                      C00i):
 
         # compute terms necessary for Jacobian
@@ -463,23 +453,23 @@ class GridLASSOInference(LASSOInference):
         self._compute_G_hess()
         G_hess, N_hess = self.G_hess, self.N_hess
         
-        self._compute_G_regressMR(C20_prod_C00i) 
+        self._compute_G_regressMR(G_blocks) 
         G_regressMR, N_regressMR = self.G_regressMR, self.N_regressMR
 
-        self._compute_dot_prods(C00i)
-        G_dot, N_dot = self.G_dot, self.N_dot
+        self._compute_shape_prods(C00i)
+        G_shape, N_shape = self.G_shape, self.N_shape
 
-        G_logdet = G_hess + G_regressMR + G_dot
-        N_logdet = N_hess + N_regressMR + N_dot
+        G_logdet = G_hess + G_regressMR + G_shape
+        N_logdet = N_hess + N_regressMR + N_shape
 
         def logdet(G_logdet,
                    N_logdet,
                    first_order):
             hessian_mat = jnp.einsum('ijk,k->ij', G_logdet, first_order) + N_logdet
             if DEBUG:
-                for (G, N, n) in zip([G_logdet, G_hess + G_regressMR, G_dot],
-                                     [N_logdet, N_hess + N_regressMR, N_dot],
-                                     ['logdet', 'hessian + proj', 'dot']):
+                for (G, N, n) in zip([G_logdet, G_hess, G_regressMR, G_shape],
+                                     [N_logdet, N_hess, N_regressMR, N_shape],
+                                     ['logdet', 'hessian', 'proj', 'dot']):
                     _mat = jnp.einsum('ijk,k->ij', G, first_order) + N
                     if jnp.any(jnp.linalg.eigvalsh(hessian_mat) < 0):
                         label = 'LOGDET {n} {{}}'.format(n=n)
@@ -579,7 +569,7 @@ class GridLASSOInference(LASSOInference):
                               basis_r=point.point.tangent_basis)[0,0] 
                 block[:,:,point.value_idx] = C20_q
                 block[:,:,point.gradient_slice] = C21_q
-                
+
             for point in self._random_peaks:
                 C20_q = RK.C20([peak.point.location],
                                [point.point.location],
@@ -591,7 +581,6 @@ class GridLASSOInference(LASSOInference):
                 block[:,:,point.value_idx] = C20_q
                 block[:,:,point.gradient_slice] = C21_q
 
-            block *= - peak.point.sign
             blocks.append(block)
             
         total_block_sizes = np.sum([block.shape[0] for block in blocks])
@@ -605,15 +594,15 @@ class GridLASSOInference(LASSOInference):
             N[H_slice, H_slice] += -p_d.point.sign * get_hessian(p_d.point)
             N[H_slice, H_slice] += -p_d.point.sign * get_hessian(p_r.point) # p_d.point.sign should match p_r.point.sign
             
-        G = np.einsum('ijk,kl->ijl', G, self.prec)
-        N -= np.einsum('ijl,l->ij',
+        N -= np.einsum('ijk,kl,l->ij',
                        G,
+                       self.prec,
                        self.first_order)
 
         self.G_hess, self.N_hess = G, N
     
     def _compute_G_regressMR(self,
-                             C20_prod_C00i):
+                             G_blocks):
 
         # let's compute the -S_E P(\nabla^2 f_E; f_E) term
         # this comes from differentiating the derivative of the irrepresentable matrix
@@ -623,24 +612,27 @@ class GridLASSOInference(LASSOInference):
         G_regressMR = np.zeros_like(self.G_hess)
 
         idx = 0            
-        for q, block in zip(self._data_peaks, C20_prod_C00i):
+        for q, block in zip(self._data_peaks, G_blocks):
             for i, (p_d, p_r) in enumerate(zip(self._data_peaks, self._random_peaks)):
                 G_regressMR[q.hessian_slice,
                             q.hessian_slice,
-                            p_d.value_idx] = block[:,:,i] 
+                            p_d.value_idx] = block[:,:,i]
                 G_regressMR[q.hessian_slice,  # p_d.hessian_slice should match p_r.hessian_slice
                             q.hessian_slice,
-                            p_r.value_idx] = block[:,:,i] 
-            G_regressMR[q.hessian_slice, q.hessian_slice] *= q.point.sign
-            
-        # G_regressMR is now the negative of the regression of -p.sign * p.hessian on to f_E (MK+RK form)
+                            p_r.value_idx] = block[:,:,i]
+
+        # G_regressMR is now the regression of -p.sign * p.hessian on to f_E (MK+RK form)
         # i.e. it is the corresponding irrepresentable matrix
 
-        N_regressMR = np.einsum('ijk,k->ij', G_regressMR, -self.sign_and_penalty)
+        arg = np.zeros_like(self.first_order)
+        for p_d in self._data_peaks:
+            p_d.set_value(arg, -p_d.point.sign * p_d.point.penalty)
+
+        N_regressMR = np.einsum('ijk,k->ij', G_regressMR, arg)
 
         self.G_regressMR, self.N_regressMR = G_regressMR, N_regressMR
 
-    def _compute_dot_prods(self,
+    def _compute_shape_prods(self,
                            C00i):
 
         MK = self.model_kernel
@@ -648,55 +640,7 @@ class GridLASSOInference(LASSOInference):
 
         D_ = np.zeros_like(self.N_hess)
         E_ = np.zeros(self.N_hess.shape + (len(self._data_peaks),))
-        G_dot = np.zeros_like(self.G_hess)
-
-        locations = [q.point.location for q in self._data_peaks]
-
-        # r,c : rows and columns of D_
-        
-        for i, qs_r in enumerate(self._data_peaks):
-            q_r = qs_r.point
-            if q_r.n_ambient > 0:
-                c10_r = (MK.C10([q_r.location],
-                                locations,
-                                basis_l=q_r.tangent_basis)[0].T +
-                         RK.C10([q_r.location],
-                                locations,
-                                basis_l=q_r.tangent_basis)[0].T) 
-                for j, qs_c in enumerate(self._data_peaks):
-                    q_c = qs_c.point
-                    if q_c.n_ambient > 0:
-                        c11 = (MK.C11([q_r.location],
-                                      [q_c.location],
-                                      basis_l=q_r.tangent_basis,
-                                      basis_r=q_c.tangent_basis)[0,0] +
-                               RK.C11([q_r.location],
-                                      [q_c.location],
-                                      basis_l=q_r.tangent_basis,
-                                      basis_r=q_c.tangent_basis)[0,0])
-                        c10_c = (MK.C10([q_c.location],
-                                        locations,
-                                        basis_l=q_c.tangent_basis)[0].T +
-                                 RK.C10([q_c.location],
-                                        locations,
-                                        basis_l=q_c.tangent_basis)[0].T)
-
-                        D_[qs_r.hessian_slice,
-                           qs_c.hessian_slice] = c11 - c10_r @ C00i @ c10_c.T
-                        D_[qs_c.hessian_slice,
-                           qs_r.hessian_slice] = D_[qs_r.hessian_slice,
-                                                    qs_c.hessian_slice].T
-
-        self._metric_matrix = D_.copy()
-
-        # multiply on the left by diagonal of appropriate signs
-
-        for i, qs_r in enumerate(self._data_peaks):
-            q_r = qs_r.point
-            if q_r.n_ambient > 0:
-                D_[qs_r.hessian_slice] *= q_r.sign
-
-        # G_diag_ takes f_E and forms the diagonal (\bar{\beta}_j)_{j \in E}
+        G_shape = np.zeros_like(self.G_hess)
 
         # matrix of inner products
         # these get scaled on right by diagonal
@@ -709,26 +653,60 @@ class GridLASSOInference(LASSOInference):
                    peak.hessian_slice,
                    i] = np.identity(ngrad)
 
-        # G_diag_(f_E) is diagonal with blocks \bar{\beta}_j(f_E)
+        locations = [q.point.location for q in self._data_peaks]
 
-        G_diag_ = np.einsum('jki,il->jkl', E_, C00i)
+        for i, qs_l in enumerate(self._data_peaks):
+            q_l = qs_l.point
+            if q_l.n_ambient > 0:
+                c10_l = (MK.C10([q_l.location],
+                                locations,
+                                basis_l=q_l.tangent_basis)[0].T +
+                         RK.C10([q_l.location],
+                                locations,
+                                basis_l=q_l.tangent_basis)[0].T) 
+                for j, qs_r in enumerate(self._data_peaks):
+                    q_r = qs_r.point
+                    if q_r.n_ambient > 0:
+                        c11 = (MK.C11([q_l.location],
+                                      [q_r.location],
+                                      basis_l=q_l.tangent_basis,
+                                      basis_r=q_r.tangent_basis)[0,0] +
+                               RK.C11([q_l.location],
+                                      [q_r.location],
+                                      basis_l=q_l.tangent_basis,
+                                      basis_r=q_r.tangent_basis)[0,0])
+                        c10_r = (MK.C10([q_r.location],
+                                        locations,
+                                        basis_l=q_r.tangent_basis)[0].T +
+                                 RK.C10([q_r.location],
+                                        locations,
+                                        basis_l=q_r.tangent_basis)[0].T)
 
-        # now multiply D_ on the right by G_diag_
-        # so composition is D_(G_diag_(v))
+                        D_[qs_l.hessian_slice,
+                           qs_r.hessian_slice] = c11 - c10_l @ C00i @ c10_r.T
+                        D_[qs_r.hessian_slice,
+                           qs_l.hessian_slice] = D_[qs_l.hessian_slice,
+                                                    qs_r.hessian_slice].T
 
-        G_ = np.einsum('ij,jkl->ikl',
+        arg = np.zeros_like(self.first_order)
+
+        for q_d in self._data_peaks:
+            D_[q_d.hessian_slice] *= q_d.point.sign
+            q_d.set_value(arg, q_d.get_value(arg) - q_d.point.sign * q_d.point.penalty)
+
+        G_ = np.einsum('ij,jkl,lm->ijm',
                        D_,
-                       G_diag_)
+                       E_,
+                       C00i)
 
-        for i, (q_data, q_rand) in enumerate(zip(self._data_peaks,
+        for i, (q_d, q_r) in enumerate(zip(self._data_peaks,
                                            self._random_peaks)):
 
-            G_dot[:,:,q_data.value_idx] = G_[:,:,i]
-            G_dot[:,:,q_rand.value_idx] = G_[:,:,i]
+            G_shape[:,:,q_d.value_idx] = G_[:,:,i]
+            G_shape[:,:,q_r.value_idx] = G_[:,:,i]
 
-        N_dot = np.einsum('ijk,k->ij', G_dot, -self.sign_and_penalty)
-
-        self.G_dot, self.N_dot = G_dot, N_dot
+        N_shape = np.einsum('ijk,k->ij', G_shape, arg)
+        self.G_shape, self.N_shape = G_shape, N_shape
 
     # decompose the subgradient process in terms of all the targets in cov
 
@@ -833,14 +811,14 @@ def _compute_random_model_cov(peaks,
                 RK_20 = RK_20.reshape(RK_20.shape + (1,))
 
                 c_g.append(MK_10 + RK_10)
-                c_h.append(MK_20 + RK_20)
+                c_h.append(-(MK_20 + RK_20) * p.sign)
             else:
                 c_g.append(np.zeros((0,1)))
                 c_h.append(np.zeros((0,0,1)))
 
         C_p.append(c_p)
         C_g.append(c_g)
-        C_h.append(np.concatenate(c_h, axis=-1))
+        C_h.append(c_h)
         
     C00 = np.array(C_p)
     C00i = np.linalg.inv(C00)
@@ -853,13 +831,13 @@ def _compute_random_model_cov(peaks,
     
     M = C00i @ np.array(C_g)
 
-    # G is the regression mapping for regressing \nabla^2 (f+omega)_E onto (f+omega)_E
+    # G is the regression mapping for regressing S_E \nabla^2 (f+omega)_E onto (f+omega)_E
 
-    C20_prod_C00i = [np.einsum('ijk,kl->ijl',
-                               c_h,
-                               C00i) for c_h in C_h]
+    G_blocks = [np.einsum('ijk,kl->ijl',
+                          np.concatenate(c_h, axis=-1),
+                          C00i) for c_h in C_h]
 
-    return C00i, M, C20_prod_C00i
+    return C00i, M, G_blocks
 
 
 @dataclass
