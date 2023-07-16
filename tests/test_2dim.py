@@ -75,7 +75,7 @@ def instance(seed=10,
                                             var=var_random,
                                             sampler=omega_sampler)
 
-    penalty_weights = 2 * np.sqrt(1 + var_random) * np.ones_like(Z)
+    penalty_weights = 2.5 * np.sqrt(1 + var_random) * np.ones_like(Z)
 
     lasso = GridLASSOInference((xval, yval),
                                penalty_weights,
@@ -122,7 +122,7 @@ def instance(seed=10,
         fig.colorbar(im, ax=ax, alpha=0.5)
         ax.scatter(E_nz[0][signs==1], E_nz[1][signs==1], c='r', s=70)
         ax.scatter(E_nz[0][signs==-1], E_nz[1][signs==-1], c='b', s=70)
-        ax.scatter(idx[:,0], idx[:,1], c='k', marker='x', s=100)
+        #ax.scatter(idx[:,0], idx[:,1], c='k', marker='x', s=100)
 
     inactive = np.ones(soln.shape, bool)
     for i, j in zip(*E_nz):

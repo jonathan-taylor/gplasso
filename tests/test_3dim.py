@@ -34,7 +34,7 @@ def compute_svd_info(xval,
 compute_svd_info = memory.cache(compute_svd_info)
 
 
-def instance(seed=10,
+def instance(seed=9,
              svd_info=None,
              plot=False):
 
@@ -43,7 +43,7 @@ def instance(seed=10,
     else:
         rng = np.random.default_rng()
         
-    nx, ny, nz = 11, 12, 13
+    nx, ny, nz = 20, 20, 20
     
     xval = np.linspace(-5,5,nx)
     yval = np.linspace(-3,8,ny)
@@ -63,8 +63,6 @@ def instance(seed=10,
                                       grid=grid,
                                       sampler=K_sampler)
 
-    Z = K.sample(rng=rng)
-
     proportion = 0.8
     var_random = (1 - proportion) / proportion
     svd_info_rand = compute_svd_info(xval,
@@ -79,29 +77,41 @@ def instance(seed=10,
                                             var=var_random,
                                             sampler=omega_sampler)
 
-    penalty_weights = 2 * np.sqrt(1 + var_random) * np.ones_like(Z)
+    while True:
+        Z = K.sample(rng=rng)
+        penalty_weights = 2.5 * np.sqrt(1 + var_random) * np.ones_like(Z)
 
-    lasso = GridLASSOInference((xval, yval, zval),
-                               penalty_weights,
-                               K,
-                               K_omega,
-                               inference_kernel=None)
+        lasso = GridLASSOInference((xval, yval, zval),
+                                   penalty_weights,
+                                   K,
+                                   K_omega,
+                                   inference_kernel=None)
 
-    E, soln, subgrad = lasso.fit(Z,
-                                 rng=rng)
+        E, soln, subgrad = lasso.fit(Z,
+                                     rng=rng)
 
-    # this is 3d grid specific
-    
-    cluster_df = default_clusters(E,
-                                  K,
-                                  cor_threshold=0.9)
-    selection = []
+        # this is 3d grid specific
 
-    for label in np.unique(cluster_df['Cluster']):
-        cur_df = cluster_df[lambda df: cluster_df['Cluster'] == label]
-        selection.append(cur_df.iloc[rng.choice(cur_df.shape[0], 1)])
-    selection = pd.concat(selection)
+        cluster_df = default_clusters(E,
+                                      K,
+                                      cor_threshold=0.9)
+        selection = []
 
+        for label in np.unique(cluster_df['Cluster']):
+            cur_df = cluster_df[lambda df: cluster_df['Cluster'] == label]
+            selection.append(cur_df.iloc[rng.choice(cur_df.shape[0], 1)])
+        selection = pd.concat(selection)
+
+        tests = []
+        for ix, iy, iz in selection['Index']:
+            test_x = (ix > 1) and (ix < nx-2)
+            test_y = (iy > 1) and (iy < ny-2)
+            test_z = (iz > 1) and (iz < nz-2)
+            tests.append(test_x * test_y * test_z)
+        if np.all(tests):
+            break
+        print(selection['Index'])
+        
     model_spec = pd.DataFrame({'Value':[True] * len(selection['Index']),
                                'Displacement':[False] * len(selection['Index'])},
                               index=selection['Index'])
@@ -113,10 +123,10 @@ def instance(seed=10,
                              'Index':[mid]}).set_index('Index')
 
     model_spec = pd.concat([model_spec, extra_pt])
-    
+
     model_spec = lasso.extract_peaks(selection['Index'],
                                      model_spec=model_spec)
-    
+
     E_nz = np.nonzero(E)
 
     inactive = np.ones(soln.shape, bool)
