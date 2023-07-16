@@ -70,11 +70,11 @@ class LASSOInference(object):
     def fit(self,
             Z,
             perturbation=None,
-            rng=None):
+            **sample_args):
         
         # fit the GP lasso
         if perturbation is None:
-            perturbation = self.randomizer_kernel.sample(rng=rng)
+            perturbation = self.randomizer_kernel.sample(**sample_args)
         self.Z, self.perturbation_ = Z, perturbation
         MK, RK = self.model_kernel, self.randomizer_kernel
         E, soln, subgrad = fit_gp_lasso(self.Z + self.perturbation_,

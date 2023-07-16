@@ -480,7 +480,6 @@ class GridLASSOInference(LASSOInference):
         G_logdet = G_hess + G_regressMR + G_dot
         N_logdet = N_hess + N_regressMR + N_dot
 
-        DEBUG = True
         def logdet(G_logdet,
                    N_logdet,
                    first_order):

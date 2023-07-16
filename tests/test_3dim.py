@@ -7,32 +7,7 @@ import pandas as pd
 from gplasso.api import (covariance_structure,
                          default_clusters,
                          GridLASSOInference,
-                         SVDSampler)
-
-from joblib import Memory
-location = './cachedir'
-memory = Memory(location, verbose=0)
-
-def compute_svd_info(xval,
-                     yval,
-                     zval,
-                     precision,
-                     var=1):
-
-    grid = np.meshgrid(xval, yval, zval, indexing='ij')
-    K = covariance_structure.gaussian(precision=precision,
-                                      grid=grid,
-                                      var=var)
-    S_ = K.C00(None, None)
-    npt = int(np.sqrt(np.product(S_.shape)))
-    shape = S_.shape[:len(S_.shape)//2]
-    S_ = S_.reshape(npt, npt)
-    U, D = np.linalg.svd(S_)[:2]
-
-    return U, D, npt, shape
-
-compute_svd_info = memory.cache(compute_svd_info)
-
+                         GSToolsSampler)
 
 def instance(seed=9,
              svd_info=None,
@@ -43,7 +18,7 @@ def instance(seed=9,
     else:
         rng = np.random.default_rng()
         
-    nx, ny, nz = 20, 20, 20
+    nx, ny, nz = 40, 25, 30
     
     xval = np.linspace(-5,5,nx)
     yval = np.linspace(-3,8,ny)
@@ -53,24 +28,14 @@ def instance(seed=9,
 
     precision = np.diag([1.4, 2.1, 1.1])
 
-    svd_info = compute_svd_info(xval,
-                                yval,
-                                zval,
-                                precision)
-    
-    K_sampler = SVDSampler(*svd_info)
+    K_sampler = GSToolsSampler.gaussian(grid, precision, var=1)
     K = covariance_structure.gaussian(precision=precision,
                                       grid=grid,
                                       sampler=K_sampler)
 
     proportion = 0.8
     var_random = (1 - proportion) / proportion
-    svd_info_rand = compute_svd_info(xval,
-                                     yval,
-                                     zval,
-                                     precision,
-                                     var=var_random)
-    omega_sampler = SVDSampler(*svd_info_rand)
+    omega_sampler = GSToolsSampler.gaussian(grid, precision, var=var_random)
     
     K_omega = covariance_structure.gaussian(precision=precision,
                                             grid=grid,
@@ -78,8 +43,9 @@ def instance(seed=9,
                                             sampler=omega_sampler)
 
     while True:
-        Z = K.sample(rng=rng)
-        penalty_weights = 2.5 * np.sqrt(1 + var_random) * np.ones_like(Z)
+        Z = K.sample(seed=rng.integers(0, 1e6))
+        seed += 1
+        penalty_weights = 3.2 * np.sqrt(1 + var_random) * np.ones_like(Z)
 
         lasso = GridLASSOInference((xval, yval, zval),
                                    penalty_weights,
@@ -87,8 +53,8 @@ def instance(seed=9,
                                    K_omega,
                                    inference_kernel=None)
 
-        E, soln, subgrad = lasso.fit(Z,
-                                     rng=rng)
+        E, soln, subgrad = lasso.fit(Z, seed=rng.integers(0, 1e6))
+
 
         # this is 3d grid specific
 
@@ -104,10 +70,12 @@ def instance(seed=9,
 
         tests = []
         for ix, iy, iz in selection['Index']:
-            test_x = (ix > 1) and (ix < nx-2)
-            test_y = (iy > 1) and (iy < ny-2)
-            test_z = (iz > 1) and (iz < nz-2)
+            test_x = (ix > 1) * (ix < nx-2)
+            test_y = (iy > 1) * (iy < ny-2)
+            test_z = (iz > 1) * (iz < nz-2)
+            print((ix, nx, test_x), (iy, ny, test_y), (iz, nz, test_z))
             tests.append(test_x * test_y * test_z)
+        print(tests, 'tests')
         if np.all(tests):
             break
         print(selection['Index'])
@@ -115,14 +83,13 @@ def instance(seed=9,
     model_spec = pd.DataFrame({'Value':[True] * len(selection['Index']),
                                'Displacement':[False] * len(selection['Index'])},
                               index=selection['Index'])
-    model_spec.loc[[selection['Index'][0]],'Value'] = False
 
     mid = (xval.shape[0]//2, yval.shape[0]//2, zval.shape[0]//2)
     extra_pt = pd.DataFrame({'Value':[True],
                              'Displacement':[False],
                              'Index':[mid]}).set_index('Index')
 
-    model_spec = pd.concat([model_spec, extra_pt])
+    #model_spec = pd.concat([model_spec, extra_pt])
 
     model_spec = lasso.extract_peaks(selection['Index'],
                                      model_spec=model_spec)
@@ -158,7 +125,7 @@ if __name__ == '__main__':
         except KeyboardInterrupt:
             break
         except Exception as e:
-            print(e)
+            print('except:', type(e), e)
             pass
         if len(dfs) > 0:
             pval = pd.concat(dfs)['P-value (2-sided)']

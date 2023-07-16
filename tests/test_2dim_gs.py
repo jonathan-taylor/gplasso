@@ -7,30 +7,7 @@ import pandas as pd
 from gplasso.api import (covariance_structure,
                          default_clusters,
                          GridLASSOInference,
-                         SVDSampler)
-
-from joblib import Memory
-location = './cachedir'
-memory = Memory(location, verbose=0)
-
-def compute_svd_info(xval,
-                     yval,
-                     precision,
-                     var=1):
-
-    grid = np.meshgrid(xval, yval, indexing='ij')
-    K = covariance_structure.gaussian(precision=precision,
-                                      grid=grid,
-                                      var=var)
-    S_ = K.C00(None, None)
-    npt = int(np.sqrt(np.product(S_.shape)))
-    shape = S_.shape[:len(S_.shape)//2]
-    S_ = S_.reshape(npt, npt)
-    U, D = np.linalg.svd(S_)[:2]
-
-    return U, D, npt, shape
-
-compute_svd_info = memory.cache(compute_svd_info)
+                         GSToolsSampler)
 
 
 def instance(seed=10,
@@ -51,22 +28,15 @@ def instance(seed=10,
 
     precision = np.diag([1.4, 2.1])
 
-    svd_info = compute_svd_info(xval,
-                                yval,
-                                precision)
-    
-    K_sampler = SVDSampler(*svd_info)
+    K_sampler = GSToolsSampler.gaussian(grid, precision, var=1)
     K = covariance_structure.gaussian(precision=precision,
                                       grid=grid,
-                                      sampler=K_sampler)
+                                      sampler=K_sampler,
+                                      var=1)
 
     proportion = 0.8
     var_random = (1 - proportion) / proportion
-    svd_info_rand = compute_svd_info(xval,
-                                     yval,
-                                     precision,
-                                     var=var_random)
-    omega_sampler = SVDSampler(*svd_info_rand)
+    omega_sampler = GSToolsSampler.gaussian(grid, precision, var=var_random)
     
     K_omega = covariance_structure.gaussian(precision=precision,
                                             grid=grid,
@@ -77,8 +47,8 @@ def instance(seed=10,
     
     while True:
 
-        Z = K.sample(rng=rng)
-        penalty_weights = 2.5 * np.sqrt(1 + var_random) * np.ones_like(Z)
+        Z = K.sample(seed=rng.integers(0, 1e6))
+        penalty_weights = 2 * np.sqrt(1 + var_random) * np.ones_like(Z)
 
         lasso = GridLASSOInference((xval, yval),
                                    penalty_weights,
@@ -86,10 +56,12 @@ def instance(seed=10,
                                    K_omega,
                                    inference_kernel=None)
 
-        E, soln, subgrad = lasso.fit(Z,
-                                     rng=rng)
+        E, soln, subgrad = lasso.fit(Z, seed=rng.integers(0, 1e6))
 
         E_nz = np.nonzero(E)
+        if True:
+            break
+        
         if ((E_nz[0].min() > 1 and E_nz[0].max() < nx-2) and
             (E_nz[1].min() > 1 and E_nz[1].max() < ny-2)):
             break

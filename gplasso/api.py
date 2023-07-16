@@ -1,6 +1,7 @@
 from .kernels import (covariance_structure,
                       discrete_structure,
-                      SVDSampler)
+                      SVDSampler,
+                      GSToolsSampler)
 from .base import LASSOInference
 from .peaks import default_clusters
 
