@@ -108,22 +108,22 @@ class LASSOInference(object):
             self.inference_kernel = self.model_kernel
 
     def fit(self,
-            Z: np.ndarray,
-            perturbation: Optional[np.ndarray] = None,
-            rng: Optional[Union[Generator, RandomState]] = None):
+            Z,
+            perturbation=None,
+            **sample_args):
         """
         Parameters
         ----------
         self : [Argument]
         Z : np.ndarray [Argument]
         perturbation : Optional[np.ndarray], optional, default: None [Argument]
-        rng : Optional[], optional, default: None [Argument]
+        sample_args : dict, passed to sampler
 
         """
 
         # fit the GP lasso
         if perturbation is None:
-            perturbation = self.randomizer_kernel.sample(rng=rng)
+            perturbation = self.randomizer_kernel.sample(**sample_args)
         self.Z, self.perturbation_ = Z, perturbation
         MK, RK = self.model_kernel, self.randomizer_kernel
         E, soln, subgrad = fit_gp_lasso(self.Z + self.perturbation_,

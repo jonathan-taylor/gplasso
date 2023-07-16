@@ -63,7 +63,6 @@ class GridLASSOInference(LASSOInference):
 
     def __post_init__(self):
         super().__post_init__()
-        print(self.inference_kernel)
         self.gridvals = [sorted(np.unique(g)) for g in self.model_kernel.grid]
 
     def get_location(self, idx):
@@ -472,7 +471,6 @@ class GridLASSOInference(LASSOInference):
         G_logdet = G_hess + G_regressMR + G_dot
         N_logdet = N_hess + N_regressMR + N_dot
 
-        DEBUG = True
         def logdet(G_logdet,
                    N_logdet,
                    first_order):

@@ -3,6 +3,7 @@ from dataclasses import dataclass
 import numpy as np
 import jax.numpy as jnp
 from jax import jacfwd
+import gstools as gs
 
 def _jax_outer_subtract(s, t):
     tmp = jnp.outer(jnp.exp(s), jnp.exp(-t))
@@ -79,11 +80,11 @@ class covariance_structure(object):
 
     # default simulation method -- better subclasses will overwrite
 
-    def sample(self, rng):
+    def sample(self, **sample_args):
 
         if self.sampler is None:
             raise ValueError('must provide "sampler" at init to draw a sample')
-        return self.sampler(rng)
+        return self.sampler(**sample_args)
 
     # location based computations
 
@@ -578,6 +579,46 @@ class SVDSampler(object):
         Z = Z.reshape(self.shape)
 
         return Z
+
+class GSToolsSampler(object):
+
+    def __init__(self,
+                 model,
+                 gridvals,
+                 linear_map,
+                 generator='RandMeth'):
+
+        self.model = model
+        self.generator = generator
+
+        flattened = np.array([g.reshape(-1) for g in gridvals])
+        self._shape = gridvals[0].shape
+        
+        self._modelpts = np.einsum('ij,ki->kj',
+                                   flattened,
+                                   linear_map) 
+
+    def __call__(self, seed=None):
+        
+        _srf = gs.SRF(self.model, generator=self.generator, seed=seed)
+        Z = _srf(self._modelpts)
+        return Z.reshape(self._shape)
+    
+    @staticmethod
+    def gaussian(gridvals,
+                 precision,
+                 generator='RandMeth',
+                 var=1):
+        model = gs.Gaussian(rescale=1/np.sqrt(2),
+                            var=var,
+                            nugget=0,
+                            dim=precision.shape[0],
+                            len_scale=[1]*precision.shape[0])
+        A = np.linalg.cholesky(precision)
+        return GSToolsSampler(model,
+                              gridvals,
+                              A,
+                              generator=generator)
 
 def _get_LR(grid, loc_l, loc_r):
     G = grid.transpose(list(range(1, grid[0].ndim+1)) + [0])

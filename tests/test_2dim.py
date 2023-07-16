@@ -61,8 +61,6 @@ def instance(seed=10,
                                       grid=grid,
                                       sampler=K_sampler)
 
-    Z = K.sample(rng=rng)
-
     proportion = 0.8
     var_random = (1 - proportion) / proportion
     svd_info_rand = compute_svd_info(xval,
@@ -76,14 +74,25 @@ def instance(seed=10,
                                             var=var_random,
                                             sampler=omega_sampler)
 
-    penalty_weights = 2.5 * np.sqrt(1 + var_random) * np.ones_like(Z)
+    # find a solution not on the boundary
+    
+    while True:
 
-    lasso = GridLASSOInference(penalty_weights,
-                               K,
-                               K_omega)
+        Z = K.sample(rng=rng)
+        penalty_weights = 2.5 * np.sqrt(1 + var_random) * np.ones_like(Z)
+        lasso = GridLASSOInference(penalty_weights,
+                                   K,
+                                   K_omega)
 
-    E, soln, subgrad = lasso.fit(Z,
-                                 rng=rng)
+        E, soln, subgrad = lasso.fit(Z,
+                                     rng=rng)
+
+        E_nz = np.nonzero(E)
+        if ((E_nz[0].min() > 1 and E_nz[0].max() < nx-2) and
+            (E_nz[1].min() > 1 and E_nz[1].max() < ny-2)):
+            break
+        else:
+            print('try again')
 
     # this is 2d grid specific
     
@@ -100,7 +109,7 @@ def instance(seed=10,
     model_spec = pd.DataFrame({'Value':[True] * len(selection['Index']),
                                'Displacement':[False] * len(selection['Index'])},
                               index=selection['Index'])
-    model_spec.loc[[selection['Index'][0]],'Value'] = False
+    model_spec.loc[[selection['Index'].iloc[0]],'Value'] = False
 
     mid = (xval.shape[0]//2, yval.shape[0]//2)
     extra_pt = pd.DataFrame({'Value':[True],
@@ -147,11 +156,12 @@ if __name__ == '__main__':
     for _ in range(200):
         try:
             df = instance(seed=None)
+            print('num peaks: ', df.shape[0])
             dfs.append(df)
         except KeyboardInterrupt:
             break
         except Exception as e:
-            print(e)
+            print('except:', type(e), e)
             pass
         if len(dfs) > 0:
             pval = pd.concat(dfs)['P-value (2-sided)']
