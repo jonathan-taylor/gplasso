@@ -42,11 +42,18 @@ def instance(seed=9,
                                             var=var_random,
                                             sampler=omega_sampler)
 
+    barrier = 0
+    for i in range(3):
+        delta_min = grid[i] - grid[i].min() + 0.1
+        delta_max = grid[i].max()-grid[i] + 0.1
+        barrier -= (np.log(delta_min/(delta_min+1)) + 
+                    np.log(delta_max/(delta_max+1)))
+    barrier -= barrier.min()
+        
     while True:
         Z = K.sample(seed=rng.integers(0, 1e6))
 
-        penalty_weights = 3.2 * np.sqrt(1 + var_random) * np.ones_like(Z)
-
+        penalty_weights = (2.2 + barrier) * np.sqrt(1 + var_random) * np.ones_like(Z)
         lasso = GridLASSOInference(penalty_weights,
                                    K,
                                    K_omega,
