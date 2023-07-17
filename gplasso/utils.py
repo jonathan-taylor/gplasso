@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from functools import partial
 
 import numpy as np
-import jax
+
 import pandas as pd
 
 from scipy.stats import norm as normal_dbn
@@ -117,24 +117,6 @@ def mle_summary(mle,
 
     return df
 
-def _obj_maker(obj,
-               offset,
-               L_beta,
-               L_W):
-
-    def _new(offset,
-             L_beta,
-             L_W,
-             beta,
-             W):
-        arg = offset + L_W @ W + L_beta @ beta
-        return obj(arg)
-
-    return partial(_new,
-                   offset,
-                   L_beta,
-                   L_W)
-
 def _compute_mle(initial_W,
                  val_,
                  grad_,
@@ -145,7 +127,6 @@ def _compute_mle(initial_W,
     W = initial_W.copy()
     I = np.identity(W.shape[0])
 
-    use_jax = True
     num_newton = 20
 
     if W.shape != (0,): # for data splitting W has shape (0,)
@@ -162,9 +143,6 @@ def _compute_mle(initial_W,
             niter = 0
             cur_val = np.inf
             step = np.linalg.inv(H) @ G
-
-            if DEBUG:
-                jax.debug.print('grad {}', G)
 
             while True:
                 W_new = W - factor * step

@@ -6,12 +6,8 @@ from dataclasses import dataclass, asdict, astuple
 
 import numpy as np
 import pandas as pd
-import jax.numpy as jnp
 from scipy.stats import norm as normal_dbn
 from scipy.stats import chi2
-
-import jax
-from jax import jacfwd
 
 from .base import (LASSOInference,
                    PointWithSlices as PointWithSlicesBase)
@@ -26,10 +22,18 @@ from .peaks import (get_gradient,
                     extract_peaks,
                     extract_points)
 
+from .optimization_problem import (logdet as logdet_,
+                                   barrier as barrier_,
+                                   logdet_jax,
+                                   barrier_jax,
+                                   _obj_maker)
+
+import jax
+import jax.numpy as jnp
+
 from .utils import (mle_summary,
                     regression_decomposition,
-                    _compute_mle,
-                    _obj_maker)
+                    _compute_mle)
 
 DEBUG = False
 
@@ -305,41 +309,95 @@ class GridLASSOInference(LASSOInference):
         initial_W = np.linalg.inv(sqrt_cov_R.T @ sqrt_cov_R) @ sqrt_cov_R.T @ R
 
         if initial_W.shape[0] != (0,): # there is some noise to integrate over
-            N_barrier_ = N_barrier + G_barrier @ (offset + L_beta @ beta_nosel)
-            G_barrier_ = G_barrier @ sqrt_cov_R
 
-            N_logdet_ = N_logdet + G_logdet @ (offset + L_beta @ beta_nosel)
-            G_logdet_ = G_logdet @ sqrt_cov_R
-
-            B_ = _obj_maker(barrier,
+            B_ = _obj_maker([barrier],
                             offset,
                             L_beta,
                             sqrt_cov_R)
 
-            LD_ = _obj_maker(logdet,
+            LD_ = _obj_maker([logdet],
                              offset,
                              L_beta,
                              sqrt_cov_R)
 
 
-            obj_jax = lambda beta, W: B_(beta, W) + LD_(beta, W)
-            grad_jax = jacfwd(obj_jax, argnums=(0,1))
-            hess_jax = jacfwd(grad_jax, argnums=(0,1))
+            (obj_jax,
+             grad_jax,
+             hess_jax) = _obj_maker([logdet, barrier],
+                                    offset,
+                                    L_beta,
+                                    sqrt_cov_R)
 
-            val_ = lambda W: obj_jax(beta_nosel, W)
-            grad_ = lambda W: grad_jax(beta_nosel, W)[1]
-            hess_ = lambda W: hess_jax(beta_nosel, W)[1][1]
+            (O_L,
+             G_L,
+             H_L) = logdet_.compose(G_logdet,
+                                    N_logdet,
+                                    offset,
+                                    L_beta,
+                                    sqrt_cov_R)
 
+            (O_BI,
+             G_BI,
+             H_BI) = barrier_.compose(self.G_barrierI,
+                                      self.N_barrierI,
+                                      offset,
+                                      L_beta,
+                                      sqrt_cov_R,
+                                      shift=0.5 / self.G_barrierI.shape[0],
+                                      scale=1)
+            
+            (O_BA,
+             G_BA,
+             H_BA) = barrier_.compose(self.G_barrierA,
+                                      self.N_barrierA,
+                                      offset,
+                                      L_beta,
+                                      sqrt_cov_R,
+                                      shift=1,
+                                      scale=1)
+            
+            O_np = lambda W: O_L(beta_nosel, W) + O_BI(beta_nosel, W) + O_BA(beta_nosel, W)
+            G_np = lambda W: G_L(beta_nosel, W)[1] + G_BI(beta_nosel, W)[1] + G_BA(beta_nosel, W)[1]
+            H_np = lambda W: H_L(beta_nosel, W)[1][1] + H_BI(beta_nosel, W)[1][1] + H_BA(beta_nosel, W)[1][1]
+
+            O_jax = lambda W: obj_jax(beta_nosel, W)
+            G_jax = lambda W: grad_jax(beta_nosel, W)[1]
+            H_jax = lambda W: hess_jax(beta_nosel, W)[1][1]
+
+            use_jax = False
+            if use_jax:
+                val_, grad_, hess_ = O_jax, G_jax, H_jax
+            else:
+                val_, grad_, hess_ = O_np, G_np, H_np
+                
             W_star = _compute_mle(initial_W,
                                   val_,
                                   grad_,
                                   hess_)
 
+            # W_np =  _compute_mle(initial_W,
+            #                      O_np,
+            #                      G_np,
+            #                      H_np)
+
             mle = beta_nosel + cov_beta_TN @ grad_jax(beta_nosel, W_star)[0]
 
             I = np.identity(W_star.shape[0])
-            H_full = hess_jax(beta_nosel, W_star)
-
+            if use_jax:
+                H_full = hess_jax(beta_nosel, W_star)
+            else:
+                H_00 = (H_L(beta_nosel, W_star)[0][0] +
+                        H_BI(beta_nosel, W_star)[0][0] +
+                        H_BA(beta_nosel, W_star)[0][0])
+                H_01 = (H_L(beta_nosel, W_star)[0][1] +
+                        H_BI(beta_nosel, W_star)[0][1] +
+                        H_BA(beta_nosel, W_star)[0][1])
+                H_10 = H_01.T
+                H_11 = (H_L(beta_nosel, W_star)[1][1] +
+                        H_BI(beta_nosel, W_star)[1][1] +
+                        H_BA(beta_nosel, W_star)[1][1])
+                H_full = [[H_00,H_01],[H_10,H_11]]
+            
             observed_info = (np.linalg.inv(cov_beta_TN) +
                              (H_full[0][0] - H_full[0][1] @
                               np.linalg.inv(I + H_full[1][1]) @
@@ -471,24 +529,10 @@ class GridLASSOInference(LASSOInference):
         G_logdet = G_hess + G_regressMR + G_dot
         N_logdet = N_hess + N_regressMR + N_dot
 
-        def logdet(G_logdet,
-                   N_logdet,
-                   first_order):
-            hessian_mat = jnp.einsum('ijk,k->ij', G_logdet, first_order) + N_logdet
-            if DEBUG:
-                for (G, N, n) in zip([G_logdet, G_hess + G_regressMR, G_dot],
-                                     [N_logdet, N_hess + N_regressMR, N_dot],
-                                     ['logdet', 'hessian + proj', 'dot']):
-                    _mat = jnp.einsum('ijk,k->ij', G, first_order) + N
-                    if jnp.any(jnp.linalg.eigvalsh(hessian_mat) < 0):
-                        label = 'LOGDET {n} {{}}'.format(n=n)
-                        jax.debug.print(label, jnp.linalg.eigvalsh(_mat))
-            return -jnp.log(jnp.linalg.det(hessian_mat))
-
         if G_logdet.shape[0] > 0:
-            logdet_ = partial(logdet,
-                              jnp.array(G_logdet),
-                              jnp.array(N_logdet))
+            logdet_ = partial(logdet_jax,
+                              G_logdet.copy(),
+                              N_logdet.copy())
         else:
             logdet_ = lambda first_order: 1
 
@@ -513,36 +557,21 @@ class GridLASSOInference(LASSOInference):
         NI_barrier = np.hstack([2 + offset_inactive,
                                 2 - offset_inactive])
 
-        def barrierI(G_barrier,
-                     N_barrier,
-                     obs):
+        self.G_barrierI, self.N_barrierI = GI_barrier, NI_barrier
 
-            arg = G_barrier @ obs + N_barrier
-            if DEBUG:
-                if jnp.any(arg < 0):
-                    jax.debug.print('INACTIVE BARRIER {}', arg[arg<0])
-            val = -jnp.mean(jnp.log(arg / (arg + 0.5)))
-            return val
+        barrierI_ = partial(barrier_jax,
+                            self.G_barrierI,
+                            self.N_barrierI,
+                            1,
+                            0.5 / GI_barrier.shape[0])
 
-        def barrierA(G_barrier,
-                     N_barrier,
-                     obs):
+        self.G_barrierA, self.N_barrierA = L_active, offset_active
+        barrierA_ = partial(barrier_jax,
+                            self.G_barrierA,
+                            self.N_barrierA,
+                            1,
+                            1)
 
-            arg = G_barrier @ obs + N_barrier
-            if DEBUG:
-                if jnp.any(arg < 0):
-                    jax.debug.print('ACTIVE BARRIER {}', arg[arg<0])
-            return -jnp.sum(jnp.log(arg / (arg + 1)))
-
-        V = L_active @ self.first_order + offset_active
-
-        barrierI_ = partial(barrierI,
-                            GI_barrier,
-                            NI_barrier)
-
-        barrierA_ = partial(barrierA,
-                            L_active,
-                            offset_active)
 
         def barrier(barrierA,
                     barrierI,

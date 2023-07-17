@@ -14,8 +14,8 @@ from .base import (LASSOInference,
                    PointWithSlices)
 from .utils import (mle_summary,
                     regression_decomposition,
-                    _compute_mle,
-                    _obj_maker)
+                    _compute_mle)
+from .optimization_problem import _obj_maker
 from .peaks import (Peak,
                     Point,
                     extract_peaks,
@@ -185,14 +185,21 @@ class DiscreteLASSOInference(LASSOInference):
             N_barrier_ = N_barrier + G_barrier @ (offset + L_beta @ beta_nosel)
             G_barrier_ = G_barrier @ sqrt_cov_R
 
-            B_ = _obj_maker(barrier,
-                            offset,
-                            L_beta,
-                            sqrt_cov_R)
+            # B_ = _obj_maker(barrier,
+            #                 offset,
+            #                 L_beta,
+            #                 sqrt_cov_R)
 
-            obj_jax = lambda beta, W: B_(beta, W) 
-            grad_jax = jacfwd(obj_jax, argnums=(0,1))
-            hess_jax = jacfwd(grad_jax, argnums=(0,1))
+            (obj_jax,
+             grad_jax,
+             hess_jax) = _obj_maker([barrier],
+                                    offset,
+                                    L_beta,
+                                    sqrt_cov_R)
+
+            # obj_jax = lambda beta, W: B_(beta, W) 
+            # grad_jax = jacfwd(obj_jax, argnums=(0,1))
+            # hess_jax = jacfwd(grad_jax, argnums=(0,1))
 
             val_ = lambda W: obj_jax(beta_nosel, W)
             grad_ = lambda W: grad_jax(beta_nosel, W)[1]
