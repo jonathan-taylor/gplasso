@@ -7,7 +7,7 @@ def fit_gp_lasso(observed_process,
                  covariance_kernels,
                  penalty_weights,
                  tol=1e-12,
-                 solve_args={},
+                 solve_args={'min_its':200},
                  num_lam=10):
     solve_args.update(tol=tol)
     
@@ -50,7 +50,7 @@ def fit_gp_lasso(observed_process,
         while True:
             Z_E = Z[E_idx]
             loss_E = rr.quadratic_loss(cur_S_E.shape, Q=cur_S_E)
-            linear_term_E = rr.identity_quadratic(0,0,-Z_E,0)
+            linear_term_E = rr.identity_quadratic(0,0,-Z_E,1e-8)
             penalty_E = rr.weighted_l1norm(penalty_weights[E_idx], lagrange=lam)
             problem_E = rr.simple_problem(loss_E, penalty_E)
             problem_E.coefs[:soln_E.shape[0]] = soln_E
@@ -116,7 +116,7 @@ def _update_S(covariance_kernels,
     new_S_E[:num_cur,:num_cur] = S_E
     for K_ in covariance_kernels:
         new_S_E[num_cur:,num_cur:] += K_.C00(new_loc,
-                                            new_loc)
+                                             new_loc)
         if num_cur > 0:
             incr = K_.C00(loc_E,
                           new_loc)
