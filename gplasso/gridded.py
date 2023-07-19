@@ -23,7 +23,7 @@ from .peaks import (get_gradient,
 
 from .optimization_problem import optimization_spec
 
-from .utils import (mle_summary,
+from .utils import (MLEInfo,
                     regression_decomposition,
                     _compute_mle)
 
@@ -280,11 +280,18 @@ class GridLASSOInference(LASSOInference):
         self._default_param = param_df.copy()
         return param_df
 
-    def _solve_MLE(self, use_jax=False):
+    def _solve_MLE(self,
+                   use_jax=False,
+                   use_logdet=True,
+                   num_newton=100):
 
         G_barrierI, N_barrierI = self.G_barrierI, self.N_barrierI 
         G_barrierA, N_barrierA = self.G_barrierA, self.N_barrierA 
         G_logdet, N_logdet = self.G_logdet, self.N_logdet
+
+        if not use_logdet:
+            N_logdet = np.identity(2)
+            G_logdet = np.zeros((2, 2, G_logdet.shape[2]))
 
         (T,
          N,
@@ -318,7 +325,8 @@ class GridLASSOInference(LASSOInference):
             W_star = _compute_mle(initial_W,
                                   val_,
                                   grad_,
-                                  hess_)
+                                  hess_,
+                                  num_newton=num_newton)
 
             mle = beta_nosel + cov_beta_TN @ G(beta_nosel, W_star)[0]
 
@@ -343,6 +351,7 @@ class GridLASSOInference(LASSOInference):
                 one_sided=True,
                 location=False,
                 use_jax=False,
+                use_logdet=True,
                 param=None):
 
         if param is None:
@@ -350,8 +359,10 @@ class GridLASSOInference(LASSOInference):
             if one_sided:
                 raise ValueError('must provide a "param" argument with a "Signs" column for one-sided tests')
             
-        mle, mle_cov = self._solve_MLE(use_jax=use_jax)
-
+        mle, mle_cov = self._solve_MLE(use_jax=use_jax,
+                                       use_logdet=use_logdet)
+        self.mle_info = MLEInfo(mle, mle_cov)
+        
         mle_df = pd.DataFrame({'Estimate':mle,
                                'SD':np.sqrt(np.diag(mle_cov))},
                               index=self._mle_index)
@@ -368,16 +379,13 @@ class GridLASSOInference(LASSOInference):
                              right_index=True)
                                  
         if one_sided:
-            value_df = mle_summary(joined_df['Estimate'],
-                                   joined_df['SD'],
-                                   param=joined_df['Param'],
-                                   signs=joined_df['Signs'],
-                                   level=level)
+            value_df = self.mle_info.summary(param=joined_df['Param'],
+                                             signs=joined_df['Signs'],
+                                             level=level)
         else:
-            value_df = mle_summary(joined_df['Estimate'],
-                                   joined_df['SD'],
-                                   param=joined_df['Param'],
-                                   level=level)
+            value_df = self.mle_info.summary(param=joined_df['Param'],
+                                             level=level)
+        
 
         # # now confidence regions for the peaks
 
@@ -457,6 +465,20 @@ class GridLASSOInference(LASSOInference):
         G_logdet = G_hess + G_regressMR + G_dot
         N_logdet = N_hess + N_regressMR + N_dot
 
+        # fudge factor -- ensure first_order is feasible for PSD constraint
+
+        test_logdet = G_logdet @ self.first_order + N_logdet
+        test_logdet = 0.5 * (test_logdet + test_logdet.T)
+        D, U = np.linalg.eigh(test_logdet)
+        D[D < 0] = 1e-6
+        delta_logdet = test_logdet - U @ np.diag(D) @ U.T
+        N_logdet -= delta_logdet
+
+        test_logdet2 = G_logdet @ self.first_order + N_logdet
+        test_logdet2 = 0.5 * (test_logdet2 + test_logdet2.T)
+
+        self._delta_logdet = delta_logdet
+
         self.G_logdet = G_logdet
         self.N_logdet = N_logdet
 
@@ -481,6 +503,19 @@ class GridLASSOInference(LASSOInference):
 
         self.G_barrierI, self.N_barrierI = GI_barrier, NI_barrier
         self.G_barrierA, self.N_barrierA = L_active, offset_active
+
+        # fudge factor -- ensure first_order is feasible for I and A
+
+        testA = self.G_barrierA @ self.first_order + self.N_barrierA
+        deltaA = (testA[testA < 0] - 1e-6)
+        self.N_barrierA[testA < 0] -= deltaA
+        
+        testI = self.G_barrierI @ self.first_order + self.N_barrierI
+        deltaI = (testI[testI < 0] - 1e-6)
+        self.N_barrierI[testI < 0] -= deltaI
+
+        self._deltaA = deltaA
+        self._deltaI = deltaI
 
     # private methods to decompose the derivative of the 0-counted process
 

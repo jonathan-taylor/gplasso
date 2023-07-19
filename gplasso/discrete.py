@@ -73,7 +73,8 @@ class DiscreteLASSOInference(LASSOInference):
             param = param.set_index('Location')
             
         mle, mle_cov = self._solve_MLE()
-        
+        mle_info = MLEInfo(mle, mle_cov)
+
         mle_df = pd.DataFrame({'Estimate':mle,
                                'SD':np.sqrt(np.diag(mle_cov)),
                                'Location':[tuple(p.point.location) for p in self._model_points]})

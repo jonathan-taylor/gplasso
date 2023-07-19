@@ -81,6 +81,82 @@ def regression_decomposition(cov, T, N):
                           cov_beta_T,
                           cov_beta_TN)
 
+@dataclass
+class MLEInfo(object):
+
+    estimate: np.ndarray
+    cov: np.ndarray
+
+    def linear_hypothesis(self,
+                          contrast,
+                          truth=None):
+        '''
+        Test $H_0:C\hat{\beta}-h=0$
+        '''
+        df = contrast.shape[0] # presumes full-rank
+        if contrast.ndim > 1:
+            if truth is None:
+                truth = np.zeros(df)
+            est = contrast @ self.estimate - truth
+            cov_est = contrast @ self.cov @ contrast.T
+            prec_est = np.linalg.inv(cov_est)
+            stat = np.einsum('i,j,ij',
+                             est,
+                             est,
+                             prec_est)
+            return Chi2Result(est,
+                              truth,
+                              cov_est,
+                              stat,
+                              df,
+                              chi2.sf(stat, df=df))
+        else:
+            if truth is None:
+                truth = 0
+            est = contrast @ self.estimate - truth
+            var_est = np.einsum('i,j,ij->',
+                                contrast,
+                                contrast,
+                                self.cov)
+            sd_est = np.sqrt(var_est)
+            stat = np.fabs(est) / sd_est
+            pvalue = chi2.sf(stat**2, df=1)
+            return ZResult(est,
+                           truth,
+                           sd_est,
+                           stat,
+                           pvalue)
+
+    def summary(self, 
+                param=None,
+                signs=None,
+                level=None):
+        return mle_summary(self.estimate,
+                           np.sqrt(np.diag(self.cov)),
+                           param=param,
+                           signs=signs,
+                           level=level)
+
+@dataclass
+class ZResult(object):
+
+    estimate: float
+    truth: float
+    std: float
+    stat: float
+    pvalue: float
+
+@dataclass
+class Chi2Result(object):
+
+    estimate: np.ndarray
+    truth: np.ndarray
+    cov: np.ndarray
+    stat: float
+    df: float
+    pvalue: float
+
+
 def mle_summary(mle,
                 SD,
                 param=None,
