@@ -114,7 +114,9 @@ def instance(seed=10,
                                             level=0.9,
                                             use_jax=use_jax)
 
-    return pivot_carve
+    p_global = lasso.mle_info.linear_hypothesis(np.identity(pivot_carve.shape[0])).pvalue
+
+    return pivot_carve, p_global
 
 def test_2d():
 
@@ -123,12 +125,13 @@ def test_2d():
 
 if __name__ == '__main__':
     dfs = []
-    
+    P_global = []
     for _ in range(200):
         try:
-            df = instance(seed=None)
+            df, p_global = instance(seed=None)
             print('num peaks: ', df.shape[0])
             dfs.append(df)
+            P_global.append(p_global)
         except KeyboardInterrupt:
             break
         except Exception as e:
@@ -136,5 +139,5 @@ if __name__ == '__main__':
             pass
         if len(dfs) > 0:
             pval = pd.concat(dfs)['P-value (2-sided)']
-            print(np.nanmean(pval), np.nanstd(pval), np.nanmean(pval < 0.05))
+            print(np.nanmean(pval), np.nanstd(pval), np.nanmean(pval < 0.05), np.mean(np.array(P_global) < 0.05))
     
