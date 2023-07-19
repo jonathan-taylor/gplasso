@@ -15,7 +15,7 @@ import jax
 from jax import jacfwd
 
 from .fit_gplasso import fit_gp_lasso
-from .kernels import covariance_structure
+from .kernels import covariance_kernel
 
 from .peaks import (get_gradient,
                     get_tangent_gradient,
@@ -99,9 +99,9 @@ class PointWithSlices(object):
 class LASSOInference(object):
 
     penalty: np.ndarray
-    model_kernel: covariance_structure
-    randomizer_kernel: covariance_structure
-    inference_kernel: Optional[covariance_structure] = None
+    model_kernel: covariance_kernel
+    randomizer_kernel: covariance_kernel
+    inference_kernel: Optional[covariance_kernel] = None
     
     def __post_init__(self):
         if self.inference_kernel is None:
@@ -137,7 +137,7 @@ class LASSOInference(object):
     def setup_inference(self,
                         inactive: np.ndarray,
                         model_spec: Optional[Any]=[],
-                        inference_kernel: Optional[covariance_structure]=None):
+                        inference_kernel: Optional[covariance_kernel]=None):
         """
         Parameters
         ----------

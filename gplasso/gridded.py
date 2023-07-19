@@ -11,7 +11,6 @@ from scipy.stats import chi2
 
 from .base import (LASSOInference,
                    PointWithSlices as PointWithSlicesBase)
-from .kernels import covariance_structure
 
 from .peaks import (get_gradient,
                     get_tangent_gradient,

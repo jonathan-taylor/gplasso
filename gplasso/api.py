@@ -1,4 +1,4 @@
-from .kernels import (covariance_structure,
+from .kernels import (covariance_kernel,
                       gaussian_kernel,
                       discrete_structure,
                       SVDSampler,
