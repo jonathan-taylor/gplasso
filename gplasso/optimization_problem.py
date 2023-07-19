@@ -2,55 +2,7 @@ from functools import partial
 from dataclasses import dataclass
 import numpy as np
 
-import jax.numpy as jnp
-from jax import jacfwd
-
-def logdet_jax(G,
-               N,
-               arg):
-    A = jnp.einsum('ijk,k->ij', G, arg) + N
-    A = 0.5 * (A + A.T)
-    eigvals = jnp.linalg.eigvalsh(A)
-    if jnp.any(eigvals) < 0:
-        return jnp.inf
-    return -jnp.sum(jnp.log(eigvals))
-
-def barrier_jax(G,
-                N,
-                scale,
-                shift,
-                arg):
-    arg = G @ arg + N
-    val = jnp.log(arg / (arg + shift))
-    if jnp.any(arg <= 0):
-        return np.inf
-    val = -jnp.sum(val)
-    return scale * val
-
-def _obj_maker(objs,
-               offset,
-               L_beta,
-               L_W):
-
-    def _new(offset,
-             L_beta,
-             L_W,
-             beta,
-             W):
-        arg = offset + L_W @ W + L_beta @ beta
-        val = 0
-        for obj in objs:
-            val = val + obj(arg)
-        return val
-    
-    final_obj = partial(_new,
-                        offset,
-                        L_beta,
-                        L_W)
-    final_grad = jacfwd(final_obj, argnums=(0,1))
-    final_hess = jacfwd(final_grad, argnums=(0,1))
-
-    return final_obj, final_grad, final_hess
+from .jax.optimization_problem import jax_spec
 
 @dataclass
 class barrier(object):
@@ -192,3 +144,81 @@ def _compose(O,
         return [[H11, H12], [H21, H22]]
 
     return obj, grad, hess
+
+def optimization_spec(offset,
+                      L_beta,
+                      sqrt_cov_R,
+                      logdet_info,
+                      barrierI_info,
+                      barrierA_info,
+                      use_jax=False):
+
+    G_logdet, N_logdet = logdet_info
+    G_barrierI, N_barrierI = barrierI_info
+    G_barrierA, N_barrierA = barrierA_info
+
+    if not use_jax:
+        (O_L,
+         G_L,
+         H_L) = logdet.compose(G_logdet,
+                               N_logdet,
+                               offset,
+                               L_beta,
+                               sqrt_cov_R)
+
+        (O_BI,
+         G_BI,
+         H_BI) = barrier.compose(G_barrierI,
+                                 N_barrierI,
+                                 offset,
+                                 L_beta,
+                                 sqrt_cov_R,
+                                 shift=0.5,
+                                 scale=1/G_barrierI.shape[0])
+
+        (O_BA,
+         G_BA,
+         H_BA) = barrier.compose(G_barrierA,
+                                 N_barrierA,
+                                 offset,
+                                 L_beta,
+                                 sqrt_cov_R,
+                                 shift=1,
+                                 scale=1)
+
+        def O_np(beta, W):
+            return O_L(beta, W) + O_BI(beta, W) + O_BA(beta, W)
+
+        def G_np(beta, W):
+            g_L = G_L(beta, W)
+            g_BI = G_BI(beta, W)
+            g_BA = G_BA(beta, W)
+            
+            return [g_L[0]+g_BI[0]+g_BA[0],
+                    g_L[1]+g_BI[1]+g_BA[1]]
+
+        def H_np(beta, W):
+            h_L = H_L(beta, W)
+            h_BI = H_BI(beta, W)
+            h_BA = H_BA(beta, W)
+            
+            H_00 = (h_L[0][0] +
+                    h_BI[0][0] +
+                    h_BA[0][0])
+            H_01 = (h_L[0][1] +
+                    h_BI[0][1] +
+                    h_BA[0][1])
+            H_10 = H_01.T
+            H_11 = (h_L[1][1] +
+                    h_BI[1][1] +
+                    h_BA[1][1])
+            return [[H_00,H_01],[H_10,H_11]]
+
+        return O_np, G_np, H_np
+    else:
+        return jax_spec(offset,
+                        L_beta,
+                        sqrt_cov_R,
+                        logdet_info,
+                        barrierI_info,
+                        barrierA_info)

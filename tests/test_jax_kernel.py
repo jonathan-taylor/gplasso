@@ -66,7 +66,7 @@
 
 import numpy as np
 from gplasso.kernels import gaussian_kernel
-from gplasso.jax_kernels import jax_covariance_kernel
+from gplasso.jax.kernels import jax_covariance_kernel
 
 def test_jax_kernel():
 

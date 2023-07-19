@@ -44,8 +44,8 @@ def instance(seed=10,
 
     lasso = DiscreteLASSOInference(penalty_weights,
                                    D,
-                                   K_omega)#,
-                                   #inference_kernel=K)
+                                   K_omega,
+                                   inference_kernel=K)
 
     E, soln, subgrad = lasso.fit(Z,
                                  rng=rng)

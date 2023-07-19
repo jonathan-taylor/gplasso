@@ -3,7 +3,7 @@ import numpy as np
 import jax.numpy as jnp
 from jax import jacfwd
 
-from .kernels import covariance_kernel
+from ..kernels import covariance_kernel
 
 def _jax_outer_subtract(s, t):
     tmp = jnp.outer(jnp.exp(s), jnp.exp(-t))

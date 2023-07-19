@@ -7,12 +7,8 @@ from dataclasses import dataclass
 import numpy as np
 from numpy.random import Generator, RandomState
 import pandas as pd
-import jax.numpy as jnp
 from scipy.stats import norm as normal_dbn
 from scipy.stats import chi2
-
-import jax
-from jax import jacfwd
 
 from .fit_gplasso import fit_gp_lasso
 from .kernels import covariance_kernel

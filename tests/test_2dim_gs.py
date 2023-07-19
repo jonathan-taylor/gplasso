@@ -12,7 +12,8 @@ from gplasso.api import (gaussian_kernel,
 
 def instance(seed=10,
              svd_info=None,
-             plot=False):
+             plot=False,
+             use_jax=False):
 
     if seed is not None:
         rng = np.random.default_rng(seed)
@@ -110,7 +111,8 @@ def instance(seed=10,
 
     pivot_carve, disp_carve = lasso.summary(one_sided=False,
                                             param=param_default,
-                                            level=0.9)
+                                            level=0.9,
+                                            use_jax=use_jax)
 
     return pivot_carve
 

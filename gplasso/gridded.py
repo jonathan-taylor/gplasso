@@ -21,14 +21,7 @@ from .peaks import (get_gradient,
                     extract_peaks,
                     extract_points)
 
-from .optimization_problem import (logdet as logdet_,
-                                   barrier as barrier_,
-                                   logdet_jax,
-                                   barrier_jax,
-                                   _obj_maker)
-
-import jax
-import jax.numpy as jnp
+from .optimization_problem import optimization_spec
 
 from .utils import (mle_summary,
                     regression_decomposition,
@@ -278,19 +271,20 @@ class GridLASSOInference(LASSOInference):
         for p in self._data_peaks:
             p.set_value(self.sign_and_penalty, p.point.sign * p.point.penalty)
 
-        self.logdet_info = self._form_logdet(C20_prod_C00i,
-                                             C00i)
-        self.barrier_info = self._form_barrier(C00i)
+        self._form_logdet(C20_prod_C00i,
+                          C00i)
+        self._form_barrier(C00i)
 
         # setup a default parameter df
         
         self._default_param = param_df.copy()
         return param_df
 
-    def _solve_MLE(self):
+    def _solve_MLE(self, use_jax=False):
 
-        barrier, G_barrier, N_barrier = self.barrier_info
-        logdet, G_logdet, N_logdet = self.logdet_info
+        G_barrierI, N_barrierI = self.G_barrierI, self.N_barrierI 
+        G_barrierA, N_barrierA = self.G_barrierA, self.N_barrierA 
+        G_logdet, N_logdet = self.G_logdet, self.N_logdet
 
         (T,
          N,
@@ -309,94 +303,28 @@ class GridLASSOInference(LASSOInference):
 
         if initial_W.shape[0] != (0,): # there is some noise to integrate over
 
-            B_ = _obj_maker([barrier],
-                            offset,
-                            L_beta,
-                            sqrt_cov_R)
+            O, G, H = optimization_spec(offset,
+                                        L_beta,
+                                        sqrt_cov_R,
+                                        (G_logdet, N_logdet),
+                                        (G_barrierI, N_barrierI),
+                                        (G_barrierA, N_barrierA),
+                                        use_jax=use_jax)
 
-            LD_ = _obj_maker([logdet],
-                             offset,
-                             L_beta,
-                             sqrt_cov_R)
+            val_ = lambda W: O(beta_nosel, W)
+            grad_ = lambda W: G(beta_nosel, W)[1]
+            hess_ = lambda W: H(beta_nosel, W)[1][1]
 
-
-            (obj_jax,
-             grad_jax,
-             hess_jax) = _obj_maker([logdet, barrier],
-                                    offset,
-                                    L_beta,
-                                    sqrt_cov_R)
-
-            (O_L,
-             G_L,
-             H_L) = logdet_.compose(G_logdet,
-                                    N_logdet,
-                                    offset,
-                                    L_beta,
-                                    sqrt_cov_R)
-
-            (O_BI,
-             G_BI,
-             H_BI) = barrier_.compose(self.G_barrierI,
-                                      self.N_barrierI,
-                                      offset,
-                                      L_beta,
-                                      sqrt_cov_R,
-                                      shift=0.5 / self.G_barrierI.shape[0],
-                                      scale=1)
-            
-            (O_BA,
-             G_BA,
-             H_BA) = barrier_.compose(self.G_barrierA,
-                                      self.N_barrierA,
-                                      offset,
-                                      L_beta,
-                                      sqrt_cov_R,
-                                      shift=1,
-                                      scale=1)
-            
-            O_np = lambda W: O_L(beta_nosel, W) + O_BI(beta_nosel, W) + O_BA(beta_nosel, W)
-            G_np = lambda W: G_L(beta_nosel, W)[1] + G_BI(beta_nosel, W)[1] + G_BA(beta_nosel, W)[1]
-            H_np = lambda W: H_L(beta_nosel, W)[1][1] + H_BI(beta_nosel, W)[1][1] + H_BA(beta_nosel, W)[1][1]
-
-            O_jax = lambda W: obj_jax(beta_nosel, W)
-            G_jax = lambda W: grad_jax(beta_nosel, W)[1]
-            H_jax = lambda W: hess_jax(beta_nosel, W)[1][1]
-
-            use_jax = False
-            if use_jax:
-                val_, grad_, hess_ = O_jax, G_jax, H_jax
-            else:
-                val_, grad_, hess_ = O_np, G_np, H_np
-                
             W_star = _compute_mle(initial_W,
                                   val_,
                                   grad_,
                                   hess_)
 
-            # W_np =  _compute_mle(initial_W,
-            #                      O_np,
-            #                      G_np,
-            #                      H_np)
-
-            mle = beta_nosel + cov_beta_TN @ grad_jax(beta_nosel, W_star)[0]
+            mle = beta_nosel + cov_beta_TN @ G(beta_nosel, W_star)[0]
 
             I = np.identity(W_star.shape[0])
-            if use_jax:
-                H_full = hess_jax(beta_nosel, W_star)
-            else:
-                H_00 = (H_L(beta_nosel, W_star)[0][0] +
-                        H_BI(beta_nosel, W_star)[0][0] +
-                        H_BA(beta_nosel, W_star)[0][0])
-                H_01 = (H_L(beta_nosel, W_star)[0][1] +
-                        H_BI(beta_nosel, W_star)[0][1] +
-                        H_BA(beta_nosel, W_star)[0][1])
-                H_10 = H_01.T
-                H_11 = (H_L(beta_nosel, W_star)[1][1] +
-                        H_BI(beta_nosel, W_star)[1][1] +
-                        H_BA(beta_nosel, W_star)[1][1])
-                H_full = [[H_00,H_01],[H_10,H_11]]
-            
+            H_full = H(beta_nosel, W_star)
+
             observed_info = (np.linalg.inv(cov_beta_TN) +
                              (H_full[0][0] - H_full[0][1] @
                               np.linalg.inv(I + H_full[1][1]) @
@@ -414,6 +342,7 @@ class GridLASSOInference(LASSOInference):
                 displacement_level=0.90,
                 one_sided=True,
                 location=False,
+                use_jax=False,
                 param=None):
 
         if param is None:
@@ -421,7 +350,7 @@ class GridLASSOInference(LASSOInference):
             if one_sided:
                 raise ValueError('must provide a "param" argument with a "Signs" column for one-sided tests')
             
-        mle, mle_cov = self._solve_MLE()
+        mle, mle_cov = self._solve_MLE(use_jax=use_jax)
 
         mle_df = pd.DataFrame({'Estimate':mle,
                                'SD':np.sqrt(np.diag(mle_cov))},
@@ -528,14 +457,8 @@ class GridLASSOInference(LASSOInference):
         G_logdet = G_hess + G_regressMR + G_dot
         N_logdet = N_hess + N_regressMR + N_dot
 
-        if G_logdet.shape[0] > 0:
-            logdet_ = partial(logdet_jax,
-                              G_logdet.copy(),
-                              N_logdet.copy())
-        else:
-            logdet_ = lambda first_order: 1
-
-        return logdet_, G_logdet, N_logdet
+        self.G_logdet = G_logdet
+        self.N_logdet = N_logdet
 
     def _form_barrier(self, C00i):
 
@@ -557,30 +480,7 @@ class GridLASSOInference(LASSOInference):
                                 2 - offset_inactive])
 
         self.G_barrierI, self.N_barrierI = GI_barrier, NI_barrier
-
-        barrierI_ = partial(barrier_jax,
-                            self.G_barrierI,
-                            self.N_barrierI,
-                            1,
-                            0.5 / GI_barrier.shape[0])
-
         self.G_barrierA, self.N_barrierA = L_active, offset_active
-        barrierA_ = partial(barrier_jax,
-                            self.G_barrierA,
-                            self.N_barrierA,
-                            1,
-                            1)
-
-
-        def barrier(barrierA,
-                    barrierI,
-                    arg):
-            return barrierA(arg) + barrierI(arg)
-
-        return (partial(barrier, barrierI_, barrierA_),
-                np.concatenate([GI_barrier,
-                                L_active], axis=0),
-                np.hstack([NI_barrier, offset_active]))
 
     # private methods to decompose the derivative of the 0-counted process
 

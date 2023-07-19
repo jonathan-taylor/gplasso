@@ -5,17 +5,13 @@ from dataclasses import dataclass, asdict, astuple
 
 import numpy as np
 import pandas as pd
-import jax.numpy as jnp
-
-import jax
-from jax import jacfwd
 
 from .base import (LASSOInference,
                    PointWithSlices)
 from .utils import (mle_summary,
                     regression_decomposition,
                     _compute_mle)
-from .optimization_problem import _obj_maker
+from .optimization_problem import optimization_spec
 from .peaks import (Peak,
                     Point,
                     extract_peaks,
@@ -60,7 +56,7 @@ class DiscreteLASSOInference(LASSOInference):
             p.set_value(self.first_order, p.point.value)
 
         locations = [p.point.location for p in self._random_peaks]
-        self.barrier_info = self._form_barrier()
+        self._form_barrier()
 
     def summary(self,
                 level=0.90,
@@ -163,7 +159,10 @@ class DiscreteLASSOInference(LASSOInference):
 
     def _solve_MLE(self):
         
-        barrier, G_barrier, N_barrier = self.barrier_info
+        G_barrierI, N_barrierI = self.G_barrierI, self.N_barrierI 
+        G_barrierA, N_barrierA = self.G_barrierA, self.N_barrierA 
+        G_logdet, N_logdet = (np.zeros((1, 1, G_barrierA.shape[-1])),
+                              np.identity(1))
 
         (T,
          N,
@@ -182,38 +181,26 @@ class DiscreteLASSOInference(LASSOInference):
 
         if initial_W.shape[0] != (0,): # there is some noise to integrate over
 
-            N_barrier_ = N_barrier + G_barrier @ (offset + L_beta @ beta_nosel)
-            G_barrier_ = G_barrier @ sqrt_cov_R
+            O, G, H = optimization_spec(offset,
+                                        L_beta,
+                                        sqrt_cov_R,
+                                        (G_logdet, N_logdet),
+                                        (G_barrierI, N_barrierI),
+                                        (G_barrierA, N_barrierA))
 
-            # B_ = _obj_maker(barrier,
-            #                 offset,
-            #                 L_beta,
-            #                 sqrt_cov_R)
-
-            (obj_jax,
-             grad_jax,
-             hess_jax) = _obj_maker([barrier],
-                                    offset,
-                                    L_beta,
-                                    sqrt_cov_R)
-
-            # obj_jax = lambda beta, W: B_(beta, W) 
-            # grad_jax = jacfwd(obj_jax, argnums=(0,1))
-            # hess_jax = jacfwd(grad_jax, argnums=(0,1))
-
-            val_ = lambda W: obj_jax(beta_nosel, W)
-            grad_ = lambda W: grad_jax(beta_nosel, W)[1]
-            hess_ = lambda W: hess_jax(beta_nosel, W)[1][1]
+            val_ = lambda W: O(beta_nosel, W)
+            grad_ = lambda W: G(beta_nosel, W)[1]
+            hess_ = lambda W: H(beta_nosel, W)[1][1]
 
             W_star = _compute_mle(initial_W,
                                   val_,
                                   grad_,
                                   hess_)
 
-            mle = beta_nosel + cov_beta_TN @ grad_jax(beta_nosel, W_star)[0]
+            mle = beta_nosel + cov_beta_TN @ G(beta_nosel, W_star)[0]
 
             I = np.identity(W_star.shape[0])
-            H_full = hess_jax(beta_nosel, W_star)
+            H_full = H(beta_nosel, W_star)
 
             observed_info = (np.linalg.inv(cov_beta_TN) +
                              (H_full[0][0] - H_full[0][1] @
@@ -265,46 +252,8 @@ class DiscreteLASSOInference(LASSOInference):
         NI_barrier = np.hstack([2 + offset_inactive,
                                 2 - offset_inactive])
 
-        def barrierI(G_barrier,
-                     N_barrier,
-                     obs):
-
-            arg = G_barrier @ obs + N_barrier
-            if DEBUG:
-                if jnp.any(arg < 0):
-                    jax.debug.print('INACTIVE BARRIER {}', arg[arg<0])
-            val = -jnp.mean(jnp.log(arg / (arg + 0.5)))
-            return val
-
-        def barrierA(G_barrier,
-                     N_barrier,
-                     obs):
-
-            arg = G_barrier @ obs + N_barrier
-            if DEBUG:
-                if jnp.any(arg < 0):
-                    jax.debug.print('ACTIVE BARRIER {}', arg[arg<0])
-            return -jnp.sum(jnp.log(arg / (arg + 1)))
-
-        V = L_active @ self.first_order + offset_active
-
-        barrierI_ = partial(barrierI,
-                            GI_barrier,
-                            NI_barrier)
-
-        barrierA_ = partial(barrierA,
-                            L_active,
-                            offset_active)
-
-        def barrier(barrierA,
-                    barrierI,
-                    arg):
-            return barrierA(arg) + barrierI(arg)
-
-        return (partial(barrier, barrierI_, barrierA_),
-                np.concatenate([GI_barrier,
-                                L_active], axis=0),
-                np.hstack([NI_barrier, offset_active]))
+        self.G_barrierI, self.N_barrierI = GI_barrier, NI_barrier
+        self.G_barrierA, self.N_barrierA = L_active, offset_active
 
     # decompose the subgradient process in terms of all the targets in cov
 
