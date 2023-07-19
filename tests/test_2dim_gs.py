@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from gplasso.api import (covariance_structure,
+from gplasso.api import (gaussian_kernel,
                          default_clusters,
                          GridLASSOInference,
                          GSToolsSampler)
@@ -29,19 +29,19 @@ def instance(seed=10,
     precision = np.diag([1.4, 2.1])
 
     K_sampler = GSToolsSampler.gaussian(grid, precision, var=1)
-    K = covariance_structure.gaussian(precision=precision,
-                                      grid=grid,
-                                      sampler=K_sampler,
-                                      var=1)
+    K = gaussian_kernel(Q=precision,
+                        grid=grid,
+                        sampler=K_sampler,
+                        var=1)
 
     proportion = 0.8
     var_random = (1 - proportion) / proportion
     omega_sampler = GSToolsSampler.gaussian(grid, precision, var=var_random)
     
-    K_omega = covariance_structure.gaussian(precision=precision,
-                                            grid=grid,
-                                            var=var_random,
-                                            sampler=omega_sampler)
+    K_omega = gaussian_kernel(Q=precision,
+                              grid=grid,
+                              var=var_random,
+                              sampler=omega_sampler)
 
     # find a solution not on the boundary
     

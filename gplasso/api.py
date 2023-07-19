@@ -1,4 +1,5 @@
 from .kernels import (covariance_structure,
+                      gaussian_kernel,
                       discrete_structure,
                       SVDSampler,
                       GSToolsSampler)

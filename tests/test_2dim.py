@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from gplasso.api import (covariance_structure,
+from gplasso.api import (gaussian_kernel,
                          default_clusters,
                          GridLASSOInference,
                          SVDSampler)
@@ -19,9 +19,9 @@ def compute_svd_info(xval,
                      var=1):
 
     grid = np.meshgrid(xval, yval, indexing='ij')
-    K = covariance_structure.gaussian(precision=precision,
-                                      grid=grid,
-                                      var=var)
+    K = gaussian_kernel(Q=precision,
+                        grid=grid,
+                        var=var)
 
     S_ = K.C00(None, None)
     npt = int(np.sqrt(np.product(S_.shape)))
@@ -57,9 +57,9 @@ def instance(seed=10,
                                 precision)
     
     K_sampler = SVDSampler(*svd_info)
-    K = covariance_structure.gaussian(precision=precision,
-                                      grid=grid,
-                                      sampler=K_sampler)
+    K = gaussian_kernel(Q=precision,
+                        grid=grid,
+                        sampler=K_sampler)
 
     proportion = 0.8
     var_random = (1 - proportion) / proportion
@@ -69,10 +69,10 @@ def instance(seed=10,
                                      var=var_random)
     omega_sampler = SVDSampler(*svd_info_rand)
     
-    K_omega = covariance_structure.gaussian(precision=precision,
-                                            grid=grid,
-                                            var=var_random,
-                                            sampler=omega_sampler)
+    K_omega = gaussian_kernel(Q=precision,
+                              grid=grid,
+                              var=var_random,
+                              sampler=omega_sampler)
 
     # find a solution not on the boundary
     

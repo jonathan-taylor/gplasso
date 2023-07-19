@@ -10,10 +10,10 @@ def _jax_outer_subtract(s, t):
     tmp = jnp.reshape(tmp, s.shape + t.shape)
     return jnp.log(tmp)
 
-def gaussian_kernel(s,
-                    t,
-                    precision=None,
-                    var=1):
+def gaussian_kernel_(s,
+                     t,
+                     precision=None,
+                     var=1):
     
     s, t = jnp.asarray(s), jnp.asarray(t)
     dim_s, dim_t = s.shape[-1], t.shape[-1]
@@ -26,25 +26,6 @@ def gaussian_kernel(s,
                                 precision,
                                 optimize=True)
     return var * jnp.exp(-0.5 * quadratic_form)
-
-def np_gaussian_kernel(s,
-                       t,
-                       precision=None,
-                       var=1,
-                       use_jax=False):
-
-    s, t = np.asarray(s), np.asarray(t)
-    dim_s, dim_t = s.shape[-1], t.shape[-1]
-    diff = np.array([np.subtract.outer(s[...,i], t[...,i]) for i in range(dim_s)])
-    if precision is None:
-        precision = np.identity(dim_s)
-    quadratic_form = np.einsum('i...,k...,ik->...',
-                               diff, 
-                               diff, 
-                               precision,
-                               optimize=True)
-    return var * np.exp(-0.5 * quadratic_form)
-
 
 class covariance_structure(object):
 
@@ -72,7 +53,7 @@ class covariance_structure(object):
                  var=1,
                  grid=None,
                  sampler=None):
-        return covariance_structure(gaussian_kernel,
+        return covariance_structure(gaussian_kernel_,
                                     kernel_args={'precision':precision,
                                                  'var':var},
                                     grid=grid,
@@ -561,6 +542,282 @@ class discrete_structure(covariance_structure):
                              grid_l,
                              grid_r)
 
+######################
+
+class isotropic(covariance_structure):
+    # covariances of the form R(s,t) = g((s-t)'Q(s-t)/2)
+    # canonical example: Gaussian, g(r)=exp(-r)
+
+    def __init__(self,
+                 Q,
+                 grid=None,
+                 sampler=None,
+                 var=1): # default grid of x values
+        self.kernel_ = lambda loc_l, loc_r: kernel(loc_l,
+                                                   loc_r,
+                                                   **kernel_args)
+
+        self.grid = grid
+        self._grid = np.asarray(grid)
+        self.sampler = sampler
+        self.Q = Q
+        self.var = var / self._func(0) 
+
+    # location based computations
+
+    def C00(self,
+            loc_l,
+            loc_r,
+            reshape=True):
+        D, grid_l, grid_r = _get_LR_np(self._grid, loc_l, loc_r)
+        value = self._reshape(self._deriv0(D),
+                              reshape,
+                              grid_l,
+                              grid_r)
+        return value
+    
+    def C10(self,
+            loc_l,
+            loc_r,
+            basis_l=None,
+            reshape=True):
+        D, grid_l, grid_r = _get_LR_np(self._grid, loc_l, loc_r)
+        value = self._deriv1(D)
+        if basis_l is not None:
+            value = np.einsum('ijk,lk->ijl', value, basis_l)
+        value = self._reshape(value,
+                              reshape,
+                              grid_l,
+                              grid_r)
+        return value
+    
+    def C01(self,
+            loc_l,
+            loc_r,
+            basis_r=None,
+            reshape=True):
+        D, grid_l, grid_r = _get_LR_np(self._grid, loc_l, loc_r)
+        value = -self._deriv1(D)
+        if basis_r is not None:
+            value = np.einsum('ijk,lk->ijl', value, basis_r)
+        value = self._reshape(value,
+                              reshape,
+                              grid_l,
+                              grid_r)
+        return value
+
+    def C20(self,
+            loc_l,
+            loc_r,
+            basis_l=None,
+            reshape=True):
+        D, grid_l, grid_r = _get_LR_np(self._grid, loc_l, loc_r)
+        value = self._deriv2(D)
+        if basis_l is not None:
+            value = np.einsum('ijkl,mk,nl->ijmn',
+                              value,
+                              basis_l,
+                              basis_l)
+        value = self._reshape(value,
+                              reshape,
+                              grid_l,
+                              grid_r)
+        return value
+
+    def C02(self,
+            loc_l,
+            loc_r,
+            basis_r=None,
+            reshape=True):
+        D, grid_l, grid_r = _get_LR_np(self._grid, loc_l, loc_r)
+        value = self._deriv2(D)
+        if basis_r is not None:
+            value = np.einsum('ijkl,mk,nl->ijmn',
+                              value,
+                              basis_r,
+                              basis_r)
+        value = self._reshape(value,
+                              reshape,
+                              grid_l,
+                              grid_r)
+        return value
+   
+    def C11(self,
+            loc_l,
+            loc_r,
+            basis_l=None,
+            basis_r=None,
+            reshape=True):
+        D, grid_l, grid_r = _get_LR_np(self._grid, loc_l, loc_r)
+        value = -self._deriv2(D)
+        if basis_l is not None:
+            value = np.einsum('ijkl,mk->ijml',
+                              value,
+                              basis_l)
+        if basis_r is not None:
+            value = np.einsum('ijkl,ml->ijkm',
+                              value,
+                              basis_r)
+        return self._reshape(value,
+                             reshape,
+                             grid_l,
+                             grid_r)
+    
+    def C21(self,
+            loc_l,
+            loc_r,
+            basis_l=None,
+            basis_r=None,
+            reshape=True):
+        D, grid_l, grid_r = _get_LR_np(self._grid, loc_l, loc_r)
+        value = -self._deriv3(D)
+        if basis_r is not None:
+            value = np.einsum('ijklm,nm->ijkln',
+                              value,
+                              basis_r)
+        if basis_l is not None:
+            value = np.einsum('ijklm,kn,lo->ijnom',
+                              value,
+                              basis_l,
+                              basis_l)
+
+        return self._reshape(value,
+                             reshape,
+                             grid_l,
+                             grid_r)
+    
+    def C12(self,
+            loc_l,
+            loc_r,
+            basis_l=None,
+            basis_r=None,
+            reshape=True):
+        D, grid_l, grid_r = _get_LR_np(self._grid, loc_l, loc_r)
+        value = self._deriv3(D)
+        if basis_l is not None:
+            value = np.einsum('ijklm,nk->ijnml',
+                              value,
+                              basis_l)
+        if basis_r is not None:
+            value = np.einsum('ijklm,nl,mo->ijkno',
+                              value,
+                              basis_r,
+                              basis_r)
+
+        return self._reshape(value,
+                             reshape,
+                             grid_l,
+                             grid_r)
+
+    def C22(self,
+            loc_l,
+            loc_r,
+            basis_l=None,
+            basis_r=None,
+            reshape=True):
+        D, grid_l, grid_r = _get_LR_np(self._grid, loc_l, loc_r)
+        value = self._deriv3(D)
+        if basis_r is not None:
+            value = np.einsum('ijklmn,om,pn->ijklop',
+                              value,
+                              basis_r,
+                              basis_r)
+        if basis_l is not None:
+            value = np.einsum('ijklmn,ok,pl->ijopmn',
+                              value,
+                              basis_l,
+                              basis_l)
+
+        return self._reshape(self._deriv4(D),
+                             reshape,
+                             grid_l,
+                             grid_r)
+        
+    #####################
+
+    def _func(self, arg, order=0):
+        raise NotImplementedError('must implement up to 4th order derivative')
+        
+    def _deriv0(self, v):
+        # v_flat of shape (-1,Q.shape[0])
+        d = self.Q.shape[0]
+        v_flat = v.reshape((-1,d))
+        Qv = np.einsum('ij,jk->ik', v_flat, self.Q)
+        arg = (Qv * v_flat).sum(-1)
+        return self.var * self._func(arg/2, order=0).reshape(v.shape[:-1])
+
+    def _deriv1(self, v):
+        # v_flat of shape (-1,Q.shape[0])
+        d = self.Q.shape[0]
+        v_flat = v.reshape((-1,d))
+        Qv = np.einsum('ij,jk->ik', v_flat, self.Q)
+        arg = (Qv * v_flat).sum(-1)
+        g_1 = self._func(arg/2, order=1)
+        return self.var * (g_1[:,None] * Qv).reshape(v.shape[:-1] + (d,))
+
+    def _deriv2(self, v):
+        # v_flat of shape (-1,Q.shape[0])
+        d = self.Q.shape[0]
+        v_flat = v.reshape((-1,d))
+        Qv = np.einsum('ij,jk->ik', v_flat, self.Q)
+        arg = (Qv * v_flat).sum(-1)
+        g_1 = self._func(arg/2, order=1)
+        g_2 = self._func(arg/2, order=2)
+        
+        V_2 = np.einsum('i,ij,ik->ijk', g_2, Qv, Qv)
+        V_1 = np.einsum('i,jk->ijk', g_1, self.Q)
+        
+        return self.var * (V_1 + V_2).reshape(v.shape[:-1] + (d, d))
+    
+    def _deriv3(self, v):
+        # v_flat of shape (-1,Q.shape[0])
+        d = self.Q.shape[0]
+        v_flat = v.reshape((-1,d))
+        Qv = np.einsum('ij,jk->ik', v_flat, self.Q)
+        arg = (Qv * v_flat).sum(-1)
+        g_2 = self._func(arg/2, order=2)
+        g_3 = self._func(arg/2, order=3)
+        
+        V_3 = np.einsum('i,ij,ik,il->ijkl', g_3, Qv, Qv, Qv)
+        V_2 = (np.einsum('i,ij,kl->ijkl', g_2, Qv, self.Q) +
+               np.einsum('i,ik,jl->ijkl', g_2, Qv, self.Q) +
+               np.einsum('i,il,jk->ijkl', g_2, Qv, self.Q))
+        return self.var * (V_3 + V_2).reshape(v.shape[:-1] + (d,)*3)
+
+    def _deriv4(self, v):
+        # v_flat of shape (-1,Q.shape[0])
+        d = self.Q.shape[0]
+        v_flat = v.reshape((-1,d))
+        Qv = np.einsum('ij,jk->ik', v_flat, self.Q)
+        arg = (Qv * v_flat).sum(-1)
+        
+        g_2 = self._func(arg/2, order=2)
+        g_3 = self._func(arg/2, order=3)
+        g_4 = self._func(arg/2, order=4)
+        
+        V_4 = np.einsum('i,ij,ik,il,im->ijklm', g_4, Qv, Qv, Qv, Qv)
+        
+        V_3 = (np.einsum('i,ij,ik,lm->ijklm', g_3, Qv, Qv, self.Q) +
+               np.einsum('i,ij,il,km->ijklm', g_3, Qv, Qv, self.Q) +
+               np.einsum('i,ij,im,kl->ijklm', g_3, Qv, Qv, self.Q) +
+               np.einsum('i,ik,il,jm->ijklm', g_3, Qv, Qv, self.Q) +
+               np.einsum('i,ik,im,jl->ijklm', g_3, Qv, Qv, self.Q) +
+               np.einsum('i,il,im,jk->ijklm', g_3, Qv, Qv, self.Q))
+        
+        V_2 = (np.einsum('i,jk,lm->ijklm', g_2, self.Q, self.Q) +
+               np.einsum('i,jl,km->ijklm', g_2, self.Q, self.Q) +
+               np.einsum('i,jm,kl->ijklm', g_2, self.Q, self.Q))
+        
+        return self.var * (V_4 + V_3 + V_2).reshape(v.shape[:-1] + (d,)*4)
+
+class gaussian_kernel(isotropic):
+    
+    def _func(self, arg, order=0):
+        return (-1)**order * np.exp(-arg)
+    
+
+######################
+
 @dataclass
 class SVDSampler(object):
 
@@ -632,4 +889,21 @@ def _get_LR(grid, loc_l, loc_r):
         grid_r = True
     loc_l, loc_r = jnp.asarray(loc_l), jnp.asarray(loc_r)
     return loc_l, loc_r, grid_l, grid_r
+
+
+def _get_LR_np(grid, loc_l, loc_r):
+    G = grid.transpose(list(range(1, grid[0].ndim+1)) + [0])
+    G = G.reshape((-1, G.shape[-1]))
+    grid_l, grid_r = False, False
+    if loc_l is None:
+        loc_l = G
+        grid_l = True
+    if loc_r is None:
+        loc_r = G 
+        grid_r = True
+    loc_l, loc_r = np.asarray(loc_l), np.asarray(loc_r)
+    D = np.array([np.subtract.outer(loc_l[:,i], loc_r[:,i])
+                  for i in range(loc_l.shape[-1])])
+    D = np.transpose(D, [1, 2, 0])
+    return D, grid_l, grid_r
 
