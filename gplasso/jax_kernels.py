@@ -53,11 +53,11 @@ class jax_covariance_kernel(covariance_kernel):
                  var=1,
                  grid=None,
                  sampler=None):
-        return covariance_structure(gaussian_kernel_,
-                                    kernel_args={'precision':precision,
-                                                 'var':var},
-                                    grid=grid,
-                                    sampler=sampler)
+        return jax_covariance_kernel(gaussian_kernel_,
+                                     kernel_args={'precision':precision,
+                                                  'var':var},
+                                     grid=grid,
+                                     sampler=sampler)
 
     # location based computations
 
